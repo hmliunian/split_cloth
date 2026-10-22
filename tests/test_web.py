@@ -121,3 +121,75 @@ def test_execution_failure_is_separate_from_model_abstention_in_gui(fixture_run)
     assert response.json()["summary"]["failed"] == 1
     assert response.json()["summary"]["needs_review"] == 0
     assert response.json()["episodes"][0]["status"] == "failed"
+
+
+def text_stage_criteria():
+    return {
+        "schema_version": "text_stage_criteria_v1",
+        "stages": [{"stage_id": 1, "name": "第一侧纵折", "action": "将第一侧实际折入",
+                    "completion_criteria": ["折边形成且参与夹爪完全松开"],
+                    "exclude": ["提起、抖开、铺平不能算第一折"]}],
+        "temporal_rules": ["准备之后才开始第一侧纵折"],
+        "boundary_rule": "松开帧属于前阶段，下一帧属于后阶段",
+        "provenance": {"method": "GPT image summary", "model": "gpt-test", "source_document": "standard.zip 5.2"},
+        "limitations": ["图像归纳不是人工金标"],
+    }
+
+
+@pytest.mark.parametrize("legacy_expert", [False, True])
+def test_text_criteria_reference_takes_priority_without_reading_image_expert(fixture_run, legacy_expert):
+    client, _, run, manifest = fixture_run
+    criteria = text_stage_criteria()
+    (run / "stage_criteria.json").write_text(json.dumps(criteria, ensure_ascii=False))
+    # Parsing this old image expert would fail: text mode must return first.
+    if legacy_expert:
+        (run / "expert.json").write_text("invalid legacy image expert")
+    response = client.get("/api/expert", params={"run_id": run.name})
+    assert response.status_code == 200, response.text
+    reference = response.json()
+    assert reference["reference_mode"] == "text_stage_criteria"
+    assert reference["stage_criteria"] == criteria
+    assert reference["provenance"] == criteria["provenance"]
+    assert reference["validation_level"] == "gpt_visual_summary_not_human_gold"
+    assert reference["pages"] == reference["page_urls"] == []
+    assert "directory" not in reference and "annotation" not in reference
+    detail = client.get("/api/episode", params={"run_id": run.name, "key": manifest["key"]})
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["expert"] == reference
+
+
+def test_legacy_image_expert_is_unchanged_without_text_criteria(fixture_run):
+    client, _, run, _ = fixture_run
+    directory = run / "expert"
+    directory.mkdir()
+    (directory / "legacy.png").write_bytes(b"image")
+    (directory / "pages.json").write_text(json.dumps([{"page_id": "p0", "image_path": "legacy.png"}]))
+    (run / "expert.json").write_text(json.dumps({"name": "Legacy expert", "directory": "expert"}))
+    response = client.get("/api/expert", params={"run_id": run.name})
+    assert response.status_code == 200, response.text
+    reference = response.json()
+    assert reference["name"] == "Legacy expert"
+    assert "stage_criteria" not in reference
+    assert len(reference["pages"]) == 1
+    assert "legacy.png" in reference["pages"][0]["url"]
+    assert reference["page_urls"] == [reference["pages"][0]["url"]]
+
+
+@pytest.mark.parametrize("criteria", [[], {}, {"schema_version": "unknown", "stages": []},
+                                       {"schema_version": "text_stage_criteria_v1", "stages": None}])
+def test_invalid_text_criteria_does_not_silently_load_image_reference(fixture_run, criteria):
+    client, _, run, _ = fixture_run
+    (run / "stage_criteria.json").write_text(json.dumps(criteria))
+    (run / "expert.json").write_text(json.dumps({"pages": ["old.png"]}))
+    response = client.get("/api/expert", params={"run_id": run.name})
+    assert response.status_code == 500
+    assert "Invalid text stage criteria" in response.json()["detail"]
+
+
+def test_text_criteria_reference_cannot_escape_run_via_symlink(fixture_run):
+    client, _, run, _ = fixture_run
+    outside = run.parent.parent / "outside_criteria.json"
+    outside.write_text(json.dumps(text_stage_criteria()))
+    (run / "stage_criteria.json").symlink_to(outside)
+    response = client.get("/api/expert", params={"run_id": run.name})
+    assert response.status_code == 400

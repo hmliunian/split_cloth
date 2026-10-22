@@ -103,6 +103,7 @@ def _settle_candidate(candidate, values, times, indices, *, direction, tolerance
 
 def detect_gripper_nodes(
     states, timestamps, frame_indices, *, source_timestamps=None,
+    node_policy="all_transitions",
     opening_directions=None, candidate_levels=DEFAULT_NODE_LEVELS,
     grouping_window_s=.25, settled_samples=3, settled_duration_s=.10,
     settled_tolerance_fraction=.02, settled_search_window_s=2.0,
@@ -114,10 +115,16 @@ def detect_gripper_nodes(
     A source PTS axis enforces complete one-row-per-video-frame feedback. Missing
     states, frame gaps and shifted timestamps are rejected, never interpolated.
     Without the source axis the result is explicitly unverified. Open nodes are
-    *eligible* stage-end candidates; closing nodes split context intervals only.
-    The caller must additionally verify the stage operation and participating
-    arms, and must not let the model replace a node's original frame ID.
+    *eligible* stage-end candidates. ``all_transitions`` preserves open and close
+    interval boundaries. ``any_open`` creates a boundary when either arm opens,
+    regardless of the other arm's state, and retains only opening changes in
+    each node. Closing events still support settling and arm-state metadata.
+    Sustained open feedback is not a new event on every frame. Node generation
+    is independent of any model-selected action or target. The caller must
+    verify stage semantics and must not replace a node's original frame ID.
     """
+    if node_policy not in {"all_transitions", "any_open"}:
+        raise ValueError("node_policy must be all_transitions or any_open")
     samples = _positive_count(settled_samples, "settled_samples")
     duration = _finite_float(settled_duration_s, "settled_duration_s")
     fraction = _finite_float(settled_tolerance_fraction, "settled_tolerance_fraction")
@@ -169,6 +176,10 @@ def detect_gripper_nodes(
         "method": "multithreshold_crossings_then_local_settled_plateaus",
         "interpretation": "feedback_settled_estimate",
         "physical_full_open_calibrated": False,
+        "node_policy": node_policy,
+        "node_trigger": ("either_arm_settled_opening" if node_policy == "any_open"
+                         else "either_arm_settled_opening_or_closing"),
+        "other_arm_state_is_metadata_only": node_policy == "any_open",
         "settled_samples": samples, "settled_duration_s": duration,
         "settled_tolerance_fraction": fraction, "settled_search_window_s": search_window,
         "settled_reversal_fraction": reversal_fraction,
@@ -239,6 +250,8 @@ def detect_gripper_nodes(
     settled_changes.sort(key=lambda item: (item["source_frame_id"], item["arm"], item["kind"]))
     grouped = {}
     for change in settled_changes:
+        if node_policy == "any_open" and change["kind"] != "open":
+            continue
         grouped.setdefault(change["source_frame_id"], []).append(change)
     nodes = []
     for frame, changes in sorted(grouped.items()):
@@ -262,6 +275,7 @@ def detect_gripper_nodes(
             "eligible_stage_end": any(item["kind"] == "open" for item in changes),
             "evidence": {"interpretation": "feedback_settled_estimate",
                          "physical_full_open_calibrated": False,
+                         "node_policy": node_policy,
                          "alignment_verified": alignment["alignment_verified"],
                          "frame_id_fixed_by_feedback": True},
         })

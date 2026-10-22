@@ -214,9 +214,53 @@ function appendReviewComparison(target, review) {
 }
 function renderEvidence() { readableSummary($("model-summary"), S.detail?.model_annotation || S.detail?.original_annotation || annotation(), "尚无模型标注结果。"); appendIntervalEvidence($("model-summary")); $("model-json").textContent = JSON.stringify(S.detail?.model_annotation || S.detail?.original_annotation || annotation(), null, 2); const review = gptReview(); readableSummary($("review-summary"), review, "尚未进行 GPT 复核。没有复核结果不代表标注已通过。"); appendReviewComparison($("review-summary"), review); $("review-json").textContent = review ? JSON.stringify(review, null, 2) : "暂无结果"; }
 
-async function loadExperts() { try { const data = await api(withRun("/api/expert")); renderExperts(data); } catch (_) { S.experts = []; renderExpertContent(); } }
+async function loadExperts() { const run = S.run; try { const data = await api(withRun("/api/expert")); if (S.run === run) renderExperts(data); } catch (_) { if (S.run === run) { S.experts = []; renderExpertContent(); } } }
 function renderExperts(data) { let items; if (Array.isArray(data)) items = data; else items = data?.experts || data?.items || (data?.expert ? [data.expert] : data && (data.pages || data.page_urls || data.annotation || data.key || data.manifest) ? [data] : []); S.experts = items; const selected = $("expert-select").value; replace($("expert-select")); if (!items.length) { const o = el("option", "", "暂无示范"); o.value = ""; $("expert-select").append(o); } else items.forEach((e, i) => { const option = el("option", "", e.name || e.label || e.id || e.key || `示范 ${i + 1}`); option.value = String(i); $("expert-select").append(option); }); if (isInt(selected) && Number(selected) < items.length) $("expert-select").value = selected; renderExpertContent(); }
-function renderExpertContent() { const expert = S.experts[Number($("expert-select").value) || 0]; const target = $("expert-content"); if (!expert) { replace(target, [el("p", "muted", "当前运行尚未配置已标注示范。")]); return; } replace(target); const m = expert.manifest || expert; const info = [m.dataset_id, m.episode_index !== undefined ? `Episode ${m.episode_index}` : null].filter(Boolean).join(" · "); if (info) target.append(el("p", "expert-meta", info)); if (expert.validation_level) target.append(el("p", "muted", "GPT视觉阶段参考 · 不是人工金标准")); if (Array.isArray(expert.limitations)) expert.limitations.forEach((text) => target.append(el("p", "muted", text))); if (expert.description || expert.note) target.append(el("p", "", expert.description || expert.note)); const pages = expert.pages || expert.montage_pages || expert.page_urls || []; const grid = el("div", "expert-grid"); pages.forEach((p, i) => { const url = pageUrl(p); if (!url) return; const img = el("img"); img.src = url; img.alt = `已标注 expert 示范，第 ${i + 1} 页`; img.loading = "lazy"; img.onclick = () => openImage(url, img.alt); grid.append(img); }); if (grid.childNodes.length) target.append(grid); else target.append(el("p", "muted", "已配置示范，但暂无可展示的网格图。")); if (expert.annotation) { const d = el("details"); d.append(el("summary", "", "查看示范阶段标签"), el("pre", "", JSON.stringify(expert.annotation, null, 2))); target.append(d); } }
+function appendCriteriaList(target, title, items) {
+  if (!Array.isArray(items) || !items.length) return;
+  target.append(el("p", "criteria-label", title));
+  const list = el("ul"); items.filter((item) => typeof item === "string").forEach((item) => list.append(el("li", "", item)));
+  target.append(list);
+}
+function renderTextStageCriteria(target, criteria) {
+  replace(target);
+  target.append(el("p", "criteria-notice", "GPT 对参考图像的文字归纳 · 非人工金标准"));
+  if (typeof criteria.boundary_rule === "string") target.append(el("p", "criteria-boundary", `阶段边界规则：${criteria.boundary_rule}`));
+  for (const stage of criteria.stages || []) {
+    const block = el("section", "stage-criteria");
+    block.append(el("h4", "", `阶段 ${stage.stage_id} · ${stage.name || ""}`));
+    if (typeof stage.action === "string") block.append(el("p", "", `动作：${stage.action}`));
+    appendCriteriaList(block, "完成条件", stage.completion_criteria);
+    appendCriteriaList(block, "易混淆动作与排除条件", stage.exclude);
+    target.append(block);
+  }
+  appendCriteriaList(target, "时序规则", criteria.temporal_rules);
+  appendCriteriaList(target, "适用限制", criteria.limitations);
+  if (criteria.provenance && typeof criteria.provenance === "object") {
+    const provenance = el("details", "criteria-provenance");
+    provenance.append(el("summary", "", "来源与生成说明"), el("pre", "", JSON.stringify(criteria.provenance, null, 2)));
+    target.append(provenance);
+  }
+}
+function renderExpertContent() {
+  const expert = S.experts[Number($("expert-select").value) || 0], target = $("expert-content");
+  const textReference = expert?.reference_mode === "text_stage_criteria" && expert.stage_criteria;
+  $("reference-title").textContent = textReference ? "文字阶段判据" : "Expert 示范";
+  $("reference-hint").textContent = textReference ? "本运行使用文字判据理解动作与完成条件；来源为 GPT 图像归纳，不是人工金标准。" : "示范用于对照阶段语义，动作时长和边界位置可能不同。";
+  $("expert-select").hidden = Boolean(textReference);
+  if (textReference) { renderTextStageCriteria(target, expert.stage_criteria); return; }
+  if (!expert) { replace(target, [el("p", "muted", "当前运行尚未配置已标注示范。")]); return; }
+  replace(target); const m = expert.manifest || expert;
+  const info = [m.dataset_id, m.episode_index !== undefined ? `Episode ${m.episode_index}` : null].filter(Boolean).join(" · ");
+  if (info) target.append(el("p", "expert-meta", info));
+  if (expert.validation_level) target.append(el("p", "muted", "GPT视觉阶段参考 · 不是人工金标准"));
+  if (Array.isArray(expert.limitations)) expert.limitations.forEach((text) => target.append(el("p", "muted", text)));
+  if (expert.description || expert.note) target.append(el("p", "", expert.description || expert.note));
+  const pages = expert.pages || expert.montage_pages || expert.page_urls || [], grid = el("div", "expert-grid");
+  pages.forEach((p, i) => { const url = pageUrl(p); if (!url) return; const img = el("img"); img.src = url; img.alt = `已标注 expert 示范，第 ${i + 1} 页`; img.loading = "lazy"; img.onclick = () => openImage(url, img.alt); grid.append(img); });
+  if (grid.childNodes.length) target.append(grid); else target.append(el("p", "muted", "已配置示范，但暂无可展示的网格图。"));
+  if (expert.annotation) { const d = el("details"); d.append(el("summary", "", "查看示范阶段标签"), el("pre", "", JSON.stringify(expert.annotation, null, 2))); target.append(d); }
+}
 function openImage(url, alt) { const safe = safeMediaUrl(url); if (!safe) return; $("dialog-image").src = safe; $("dialog-image").alt = alt || "时序网格大图"; $("image-dialog").showModal(); }
 function readBoundaryForm() { return [0, 1, 2].map((i) => { const value = $(`boundary-${i}`).value; return value === "" ? null : Number(value); }); }
 async function saveReview(event) { event?.preventDefault(); if (!S.detail || S.saving) return; const status = $("review-status").value, bs = readBoundaryForm(), completion = $("completion-frame").value === "" ? null : Number($("completion-frame").value); const approved = ["approved", "corrected"].includes(status); let error = ""; if ((approved || bs.some((b) => b !== null) || completion !== null) && !validBoundaries(bs)) error = `请填写 3 个递增的整数边界，范围为 0–${frameCount() - 2}；未确定边界时可全部留空并保存为待复核。`; if (bs.some((b) => b !== null && (!Number.isInteger(b) || b < 0 || b >= frameCount()))) error = "边界必须是视频范围内的整数帧号。"; if (approved && completion === null) error = "确认通过时请填写第4阶段完成帧；无法判断请保留待复核。"; if (completion !== null && (!Number.isInteger(completion) || completion < 0 || completion >= frameCount() || (Number.isInteger(bs[2]) && completion <= bs[2]))) error = "第 4 阶段完成帧必须在第 3 个边界之后，且位于视频范围内。"; if (error) { $("form-error").textContent = error; $("form-error").hidden = false; return; }

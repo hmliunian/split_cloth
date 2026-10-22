@@ -142,6 +142,23 @@ def _pages(run: Path, directory: Path) -> list[dict[str, Any]]:
 
 
 def _expert(run: Path) -> Any:
+    criteria_path = _inside(run, run / "stage_criteria.json")
+    if criteria_path.is_file():
+        criteria = _json(criteria_path)
+        if (not isinstance(criteria, dict)
+                or criteria.get("schema_version") != "text_stage_criteria_v1"
+                or not isinstance(criteria.get("stages"), list)):
+            raise HTTPException(500, "Invalid text stage criteria in stage_criteria.json")
+        # Text-reference runs must not resolve or expose the old image expert.
+        return {
+            "reference_mode": "text_stage_criteria",
+            "name": "文字阶段判据",
+            "validation_level": "gpt_visual_summary_not_human_gold",
+            "stage_criteria": criteria,
+            "provenance": criteria.get("provenance", {}),
+            "limitations": criteria.get("limitations", []),
+            "pages": [], "page_urls": [],
+        }
     expert = _json(_inside(run, run / "expert.json"))
     if isinstance(expert, dict):
         expert = dict(expert)

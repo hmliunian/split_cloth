@@ -9,6 +9,7 @@ import pytest
 from split_cloth.interval_probe import _one, _request_record, build_interval_messages
 from split_cloth.util import episode_dir, file_hash, read_json, write_json
 from split_cloth.web import _inside
+from split_cloth.stage_criteria import load_stage_criteria, validate_stage_criteria
 
 
 def fixture(tmp_path):
@@ -95,3 +96,74 @@ def test_preflight_failure_is_recorded_without_breaking_entire_batch(tmp_path):
     annotation = read_json(episode_dir(run, m) / "annotation.json")
     assert annotation["execution_error"] == "ValueError"
     assert annotation["training_ready"] is False
+
+
+def text_fixture(tmp_path):
+    values = fixture(tmp_path)
+    project, baseline, run, m, nodes, prepared, config = values
+    criteria = load_stage_criteria(Path(__file__).parents[1] / "configs/fold_cloth_text_criteria_v1.json")
+    write_json(run / "stage_criteria.json", criteria)
+    (run / "expert.json").unlink()
+    (run / "standards/stage.png").unlink()
+    config.update(reference_mode="text_stage_criteria", temporal_order=True)
+    config["nodes"]["node_policy"] = "any_open"
+    return values
+
+
+def test_text_mode_contains_only_target_images_and_no_expert_timings(tmp_path):
+    project, baseline, run, m, nodes, prepared, config = text_fixture(tmp_path)
+    messages = build_interval_messages(run, episode_dir(run, m), nodes, prepared)
+    content = messages[1]["content"]
+    images = [part for part in content if part["type"] == "image_url"]
+    texts = "\n".join(part["text"] for part in content if part["type"] == "text")
+    assert len(images) == len(prepared["pages"]) == 1
+    assert "REFERENCE_TEXT_CRITERIA" in texts
+    assert "REFERENCE_STANDARD" not in texts
+    assert "reference_expert/montage" not in texts
+    assert "source_images" not in texts and "boundary_frames" not in texts
+    assert "第一侧" in texts and "temporal_rules" in texts
+    assert "每次稳定张开事件" in messages[0]["content"]
+
+
+def test_text_prepare_has_no_reference_images_or_provider_calls(tmp_path):
+    project, baseline, run, m, nodes, prepared, config = text_fixture(tmp_path)
+    with patch("split_cloth.interval_probe.decode_video_axis", return_value=[i / 20 for i in range(10)]), \
+         patch("split_cloth.interval_probe.prepare_gripper_nodes", return_value=nodes), \
+         patch("split_cloth.interval_probe.prepare_interval_montages", return_value=prepared), \
+         patch("split_cloth.interval_probe.request_annotation", side_effect=AssertionError("No provider")):
+        row = _one(project, run, baseline, m, config, "hash", prepare_only=True)
+    assert row["status"] == "prepared_for_selection" and row["images"] == 1
+    inventory = read_json(episode_dir(run, m) / "payload_inventory.json")
+    assert inventory["reference_image_count"] == 0
+    assert inventory["node_policy"] == "any_open"
+    assert inventory["temporal_order_validation"] is True
+    assert len(inventory["image_files"]) == 1
+
+
+def test_changed_text_criteria_requires_new_run(tmp_path):
+    project, baseline, run, m, nodes, prepared, config = text_fixture(tmp_path)
+    with patch("split_cloth.interval_probe.decode_video_axis", return_value=[i / 20 for i in range(10)]), \
+         patch("split_cloth.interval_probe.prepare_gripper_nodes", return_value=nodes), \
+         patch("split_cloth.interval_probe.prepare_interval_montages", return_value=prepared), \
+         patch("split_cloth.interval_probe.request_annotation", side_effect=AssertionError("No provider")):
+        assert _one(project, run, baseline, m, config, "hash", prepare_only=True)["status"] == "prepared_for_selection"
+        criteria = read_json(run / "stage_criteria.json")
+        criteria["stages"][0]["action"] += " updated"
+        write_json(run / "stage_criteria.json", criteria)
+        row = _one(project, run, baseline, m, config, "hash", prepare_only=True)
+    assert row["status"] == "input_conflict"
+
+
+@pytest.mark.parametrize("change", ["missing_stage", "stage_order", "empty_completion", "missing_provenance"])
+def test_invalid_text_criteria_fail_before_inference(change):
+    criteria = load_stage_criteria(Path(__file__).parents[1] / "configs/fold_cloth_text_criteria_v1.json")
+    if change == "missing_stage":
+        criteria["stages"].pop()
+    elif change == "stage_order":
+        criteria["stages"].reverse()
+    elif change == "empty_completion":
+        criteria["stages"][0]["completion_criteria"] = []
+    else:
+        criteria.pop("provenance")
+    with pytest.raises(ValueError):
+        validate_stage_criteria(criteria)

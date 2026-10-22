@@ -1,0 +1,115 @@
+{
+  "schema_version": "text_stage_criteria_v1",
+  "stages": [
+    {
+      "stage_id": 1,
+      "name": "准备并完成第一侧纵折",
+      "action": "取衣、展开和铺平后，将衣物一侧（包括对应袖部）向衣身中线内折，形成第一条可辨认的纵向折边。左右方向以衣物自身为准。",
+      "completion_criteria": [
+        "时序中可见从展开衣物到第一侧折入的形态变化，另一侧尚未完成同类内折。",
+        "折入部分落在衣身上并保持折叠形态，不再由夹爪悬吊展开；参与该操作的夹爪已经完全松开。"
+      ],
+      "exclude": [
+        "仅把整件衣物提起、拉伸、抖开、重放或铺平，不算第一侧纵折完成。",
+        "衣物受拉伸变窄或短暂卷曲，随后重新展开，不能仅凭一帧外形当作完成。"
+      ]
+    },
+    {
+      "stage_id": 2,
+      "name": "完成另一侧纵折",
+      "action": "在第一侧已经折入的基础上，将另一侧及袖部向中间折入，使衣物成为较窄的纵向长条。",
+      "completion_criteria": [
+        "能从前后图像看出第二侧实际折入，长条形态由叠层形成，而不是整件衣物被拉紧。",
+        "两侧折入后的长条已落稳，参与本次操作的夹爪完全松开。"
+      ],
+      "exclude": [
+        "不能将准备期第二次提衣或铺衣当作第二次折叠。",
+        "没有第一侧折入的时序证据时，不因衣物看起来窄就认定第二阶段完成。"
+      ]
+    },
+    {
+      "stage_id": 3,
+      "name": "完成长条横折",
+      "action": "将已经形成的长条沿长度方向对折或横向折短，形成比长条更短、更紧凑的衣物包。",
+      "completion_criteria": [
+        "可见长条一端向另一端翻折并叠放，衣物长度显著缩短，形成紧凑叠层。",
+        "衣物包落稳且参与该次横折的夹爪完全松开。"
+      ],
+      "exclude": [
+        "不把长条的平移、旋转、抓取或搬离当作横折。",
+        "横折前缺少长条形成证据、操作失败或随后展开时，保留疑问。"
+      ]
+    },
+    {
+      "stage_id": 4,
+      "name": "移走折好的衣物",
+      "action": "横折结束后抓取衣物包并移出当前工作区；判断完成必须查看后续画面。",
+      "completion_criteria": [
+        "能观察目标衣物包被带离本次操作区域，后续该区域不再有目标衣物，且出现松爪或空载返回等完成后证据；其他背景衣物或物品不影响这一判断。",
+        "区分可见移出完成状态与实际画外放置/释放时刻；后者不可见时不能声称精确释放。"
+      ],
+      "exclude": [
+        "视频结束本身不是完成证据。",
+        "只有提起或正在移出、终态不可见，不能直接判完成。"
+      ]
+    }
+  ],
+  "temporal_rules": [
+    "按区间编号与时间读取全序列；区间内从左到右、从上到下，多页同区间接续。",
+    "阶段顺序为第一侧纵折→另一侧纵折→长条横折→移走；必须有实际形态变化支持，不能用张爪次数或时长比例代替。",
+    "一个阶段可跨多个候选区间；准备、重抓、短暂松爪可以重复，不自动推进阶段。",
+    "阶段末节点应同时有本次操作完成证据与松爪证据，并与后续动作衔接；不得引用所选节点之后的动作证明此前已完成。",
+    "任意一只夹爪的每次稳定张开事件都保留为候选关键帧，不要求双手同时张开；候选不等于阶段末。",
+    "缺阶段、回退返工、遮挡或证据冲突时保留对应null，不强行补足顺序。"
+  ],
+  "boundary_rule": "依据5.2：衣物本体已完成但夹爪仍抓持时，仍属于本阶段。参与动作的夹爪完全松开的候选节点属于本阶段结束帧，下一原始帧属于下一阶段；421/422/423仅为规范示例，不是待标视频的答案。",
+  "provenance": {
+    "method": "gpt_visual_summary",
+    "reviewer": "GPT in Codex",
+    "source_run": "qwen3_8_max_paired6_20261022",
+    "source_document": "standard.zip/Untitled.md §5.1/5.2",
+    "source_document_sha256": "207e57c78f75f55269ea23eee50a4e419f813e7a1ceb6fd2c3091392d48a2e47",
+    "source_images": [
+      {
+        "path": "standards/stage_1.png",
+        "sha256": "2ee5a1142f251016f1880983e440befa7298ec55e830aeb4e88af9b13189c587"
+      },
+      {
+        "path": "standards/stage_2.png",
+        "sha256": "3c05feba08a953f00fa9c5fed78b305ae01607cf9f028fded958de0c78a96669"
+      },
+      {
+        "path": "standards/stage_3.png",
+        "sha256": "30d279091ddfe1ed351abcfaec255fbdd40cc0db3605a757bec63ab678d3f2df"
+      },
+      {
+        "path": "standards/stage_4.png",
+        "sha256": "e567e600aad845da0f935c74830e6797dd632c80ca48c5b7390ecbd2b5b26820"
+      },
+      {
+        "path": "reference_expert/montage/page_000.png",
+        "sha256": "d7f36dddebba8aa351e910068c0cc82e113f108c5708c237b8a6e46a5142cb85"
+      },
+      {
+        "path": "reference_expert/montage/page_001.png",
+        "sha256": "dd65051da41954a45bbdafbf42d5563d97d1a3e2e0381185a60f27f530681249"
+      },
+      {
+        "path": "reference_expert/montage/page_002.png",
+        "sha256": "b604a4d6cddcefe0dc5399a5af4de4efc505f88df806a837bd4c7e8601bfb1c2"
+      },
+      {
+        "path": "reference_expert/montage/page_003.png",
+        "sha256": "664c488836cc4f5bfbf7b829ec1adf77f58a4a845b2d16c856999447efe76fef"
+      }
+    ],
+    "scope": "Derived from the four standard stage images and chronological expert images; no target predictions or target images used. Expert frame numbers, labels and timing proportions are not copied into these criteria.",
+    "created_date": "2026-10-22"
+  },
+  "limitations": [
+    "文字判据是GPT对参考图和时序的解释，尚非人工验收金标准。",
+    "单张参考图无法充分说明动作过程；已结合参考时序区分准备、两次纵折、横折和移出。",
+    "参考中夹爪对比度低，不能用这些图校准物理完全松开；目标候选仍是反馈稳定平台估计。",
+    "移出后实际画外放置质量和首次释放时刻不可见，不作推断。"
+  ]
+}

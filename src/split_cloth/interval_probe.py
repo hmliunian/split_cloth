@@ -21,6 +21,7 @@ from .interval_montage import prepare_interval_montages
 from .pipeline import save_labels
 from .prompts import image_item
 from .provider import request_annotation
+from .stage_criteria import load_stage_criteria
 from .util import episode_dir, file_hash, now, object_hash, read_json, read_jsonl, write_json, write_jsonl
 
 SYSTEM = """你是机器人折衣过程的阶段语义标注员。依据文档5.1四阶段图与5.2边界规范工作。
@@ -48,6 +49,34 @@ stage4_completion:{observed:boolean,interval_id:TARGET区间ID或null,evidence_t
 三个非空节点须严格按时间递增。第4阶段完成需另外引用第三边界后的remove区间及完成证据。
 未解决的阶段保留对应null槽位。没有实际松爪节点时不能输出VIDEO_END代替。禁止额外字段，尤其禁止frame/end_frame/timestamp字段。"""
 
+TEXT_SYSTEM = """你是机器人折衣视频的时序阶段标注员。依据所给文字阶段判据和TARGET图片，逐区间观察完整视频。
+参考图已由GPT离线归纳为文字；本次没有参考图片、expert示范、expert时间或旧TARGET答案。
+任意一只夹爪的每次稳定张开事件都是候选节点；另一只夹爪不必同时张开。持续张开不重复建点。
+节点是反馈稳定平台估计，不是物理完全松开的人工金标；动作是否完成必须结合节点前后的TARGET时序画面判断。
+5.2：421帧衣服虽完成但夹爪未松开仍属阶段1；422帧完全松开为阶段1结束；423帧起为下一阶段。
+完整区间按编号和时间递增阅读，每页从左到右、从上到下；多页同区间则接续阅读。EMPTY和排版距离不表示时间。
+先记录每个区间可见的衣物形态变化和操作是否完成，再在全序列中选择阶段末节点，检查前后动作能否衔接。
+准备/抖开/铺平/重抓可以重复，且仍属阶段1，直到确实发生第一侧折入并完成；不能把每次张爪当一次折叠。
+first_fold→second_fold→cross_fold→remove须由可见形态变化支持；一个阶段可以跨多个区间。
+某次折叠进行中与完成后的等待/松爪可以跨区间：后续等待区间保持对应fold活动，operation_complete表示右端本操作是否完成。
+prepare只表示尚未发生实际第一侧折叠的准备，不能拿prepare完成来替代fold完成。
+每个evidence_text只写短的可核对视觉事实，不写假设；边界解释简述前后形态、为何这次松爪结束该操作。
+阶段结束仅选给定eligible_stage_end=true节点ID；参与该折叠的手须在节点open_arms中，不能把unknown当open或无依据填写双手。
+三个非空节点须严格递增，所有区间观察也须按原时序；不能忽略未引用区间中的反证或用后续折叠证明更早完成。
+缺阶段、返工、节点漏检或遮挡时相应节点为null并needs_review=true；不按时长等分、不强凑完整四阶段。
+节点帧归前一阶段，下一原始帧归下一阶段。禁止输出帧号、时间戳。只输出一个JSON对象。"""
+
+
+def _reference_paths(run):
+    run = Path(run)
+    if (run / "stage_criteria.json").exists():
+        load_stage_criteria(run / "stage_criteria.json")
+        return [run / "stage_criteria.json"]
+    catalog, expert = read_json(run / "standard_catalog.json"), read_json(run / "expert.json")
+    expert_dir = run / expert["directory"]
+    return [run / s["reference_image"] for s in catalog["stages"]] + [
+        expert_dir / p["image_path"] for p in read_json(expert_dir / "pages.json")]
+
 
 def _text(value):
     return {"type": "text", "text": value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}
@@ -55,15 +84,22 @@ def _text(value):
 
 def build_interval_messages(run, output, node_result, prepared):
     run, output = Path(run), Path(output)
-    catalog = read_json(run / "standard_catalog.json")
-    expert = read_json(run / "expert.json")
-    content = [_text({"stage_definitions": catalog["stages"], "boundary_spec": "standard.zip Untitled.md section 5.2"})]
-    for stage in catalog["stages"]:
-        content.extend([_text(f"REFERENCE_STANDARD stage={stage['stage_id']}"), image_item(run / stage["reference_image"])])
-    expert_dir = run / expert["directory"]
-    content.append(_text("EXPERT是另一条视频的GPT粗视觉参考，非人工金标。仅参考动作语义和阶段顺序，不可复制节点、帧号或时长比例。TARGET节点ID只在TARGET有效。"))
-    for page in read_json(expert_dir / "pages.json"):
-        content.extend([_text(f"EXPERT {page['page_id']}"), image_item(expert_dir / page["image_path"])])
+    text_mode = (run / "stage_criteria.json").exists()
+    if text_mode:
+        criteria = load_stage_criteria(run / "stage_criteria.json")
+        content = [_text({"REFERENCE_TEXT_CRITERIA": {key: criteria[key] for key in
+                         ("schema_version", "stages", "temporal_rules", "boundary_rule", "limitations")},
+                         "provenance": "GPT visual summary, not human ground truth; no reference images in this request"})]
+    else:
+        catalog = read_json(run / "standard_catalog.json")
+        expert = read_json(run / "expert.json")
+        content = [_text({"stage_definitions": catalog["stages"], "boundary_spec": "standard.zip Untitled.md section 5.2"})]
+        for stage in catalog["stages"]:
+            content.extend([_text(f"REFERENCE_STANDARD stage={stage['stage_id']}"), image_item(run / stage["reference_image"])])
+        expert_dir = run / expert["directory"]
+        content.append(_text("EXPERT是另一条视频的GPT粗视觉参考，非人工金标。仅参考动作语义和阶段顺序，不可复制节点、帧号或时长比例。TARGET节点ID只在TARGET有效。"))
+        for page in read_json(expert_dir / "pages.json"):
+            content.extend([_text(f"EXPERT {page['page_id']}"), image_item(expert_dir / page["image_path"])])
     table = [{"node_id": n["node_id"], "time_s": round(n["timestamp_s"], 4),
               "changes": [{"arm": c["arm"], "kind": c["kind"]} for c in n["changes"]],
               "open_arms": n["open_arms"], "closed_arms": n["closed_arms"], "unknown_arms": n["unknown_arms"],
@@ -80,7 +116,7 @@ def build_interval_messages(run, output, node_result, prepared):
                               "instruction": "本页只含本区间；与上一页同区间则继续，否则进入下一个区间。"}))
         content.append(image_item(page["image_path"]))
     content.append(_text(SCHEMA))
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": content}]
+    return [{"role": "system", "content": TEXT_SYSTEM if text_mode else SYSTEM}, {"role": "user", "content": content}]
 
 
 def _request_record(output, messages, provider):
@@ -124,9 +160,10 @@ def _one(project, run, baseline, manifest, config, code_hash, prepare_only=False
             if not old_input:
                 raise ValueError("Missing validated baseline source metadata")
             catalog = read_json(run / "standard_catalog.json")
-            expert_dir = run / read_json(run / "expert.json")["directory"]
-            reference_paths = [run / stage["reference_image"] for stage in catalog["stages"]]
-            reference_paths += [expert_dir / p["image_path"] for p in read_json(expert_dir / "pages.json")]
+            text_mode = config.get("reference_mode") == "text_stage_criteria"
+            if text_mode != (run / "stage_criteria.json").exists():
+                raise ValueError("Configured reference mode does not match frozen run references")
+            reference_paths = _reference_paths(run)
             video_hash, parquet_hash = file_hash(manifest["source_video_path"]), file_hash(manifest["parquet_path"])
             if video_hash != old_input["source_video_sha256"]:
                 raise ValueError("Source video has changed since baseline")
@@ -135,7 +172,7 @@ def _one(project, run, baseline, manifest, config, code_hash, prepare_only=False
                 raise ValueError("Source standard.zip changed since registered stage definitions")
             fingerprint = object_hash({"config": config, "code_hash": code_hash, "video": video_hash,
                                        "standard_zip_sha256": standard_hash,
-                                       "parquet": parquet_hash, "expert": read_json(run / "expert.json"), "catalog": catalog,
+                                       "parquet": parquet_hash, "expert": None if text_mode else read_json(run / "expert.json"), "catalog": catalog,
                                        "references": [file_hash(path) for path in reference_paths]})
             prior_input = read_json(output / "experiment_input.json")
             if prior_input and prior_input["input_fingerprint"] != fingerprint:
@@ -177,8 +214,15 @@ def _one(project, run, baseline, manifest, config, code_hash, prepare_only=False
                 "interval_count": len(prepared["intervals"]), "interval_pages": len(prepared["pages"]), "image_count": image_count,
                 "sampling": "1fps independently within each interval, plus original first and last frames",
                 "raw_gripper_values_sent": False, "local_frame_refinement": False,
-                "payload": "stage reference images, same GPT expert reference, fixed node/arm-state table, chronologically ordered independent interval montages",
-                "image_files": [{"path": str(path), "sha256": file_hash(path)} for path in reference_paths + [Path(p["image_path"]) for p in prepared["pages"]]],
+                "reference_mode": "text_stage_criteria" if text_mode else "expert_images",
+                "reference_image_count": 0 if text_mode else len(reference_paths),
+                "text_criteria_sha256": file_hash(run / "stage_criteria.json") if text_mode else None,
+                "temporal_order_validation": config.get("temporal_order", False),
+                "node_policy": config["nodes"].get("node_policy", "all_transitions"),
+                "payload": ("GPT textual criteria only; any-arm opening nodes; chronological TARGET interval images" if text_mode else
+                            "stage reference images, same GPT expert reference, fixed node/arm-state table, chronologically ordered independent interval montages"),
+                "image_files": [{"path": str(path), "sha256": file_hash(path)} for path in
+                                ([] if text_mode else reference_paths) + [Path(p["image_path"]) for p in prepared["pages"]]],
             })
             if prepare_only:
                 return {"key": manifest["key"], "status": "prepared_for_selection", "nodes": len(nodes["nodes"]),
@@ -186,8 +230,11 @@ def _one(project, run, baseline, manifest, config, code_hash, prepare_only=False
             response = request_annotation(project, selection_dir, messages, config["provider"])
             raw = json.loads(response["content"])
             write_json(selection_dir / "model_output.json", raw)
-            annotation = normalize_interval_selection(raw, nodes["nodes"], prepared["intervals"], manifest)
+            annotation = normalize_interval_selection(raw, nodes["nodes"], prepared["intervals"], manifest,
+                                                      temporal_order=config.get("temporal_order", False))
             annotation.update({**manifest, "input_fingerprint": fingerprint, "algorithm_hash": code_hash,
+                               "reference_mode": "text_stage_criteria" if text_mode else "expert_images",
+                               "node_policy": config["nodes"].get("node_policy", "all_transitions"),
                                "model_id": response["model"], "baseline_run": baseline.name,
                                "boundary_spec": "standard.zip/Untitled.md section 5.2", "node_count": len(nodes["nodes"]),
                                "interval_count": len(prepared["intervals"]), "image_count": image_count})
@@ -220,18 +267,25 @@ def run_interval_probe(project, run, baseline, config, limit=None, prepare_only=
         raise ValueError("Model snapshot must match baseline")
     code_hash = object_hash({name: file_hash(Path(__file__).with_name(name)) for name in
                             ("interval_probe.py", "interval_montage.py", "interval_contract.py", "gripper_nodes.py",
-                             "gripper_events.py", "event_visuals.py", "event_probe.py", "provider.py", "prompts.py", "util.py", "boundaries.py")})
+                             "gripper_events.py", "event_visuals.py", "event_probe.py", "provider.py", "prompts.py", "util.py", "boundaries.py", "stage_criteria.py")})
+    text_mode = config.get("reference_mode") == "text_stage_criteria"
+    criteria_path = project / config["stage_criteria_file"] if text_mode else None
+    criteria = load_stage_criteria(criteria_path) if text_mode else None
     contract = {"run_id": run.name, "baseline_run": baseline.name, "config": config, "algorithm_hash": code_hash,
-                "manifest_hash": object_hash(manifests), "spec_version": SPEC_VERSION, "is_human_ground_truth": False}
+                "manifest_hash": object_hash(manifests), "spec_version": SPEC_VERSION, "is_human_ground_truth": False,
+                "reference_mode": "text_stage_criteria" if text_mode else "expert_images",
+                "stage_criteria_sha256": file_hash(criteria_path) if text_mode else None}
     prior = read_json(run / "run.json")
     if prior and any(prior.get(key) != value for key, value in contract.items()):
         raise ValueError("Changed frozen interval contract; use a new run name")
     run.mkdir(parents=True, exist_ok=True)
     write_json(run / "run.json", {**contract, "created_at": prior["created_at"] if prior else now()})
     write_jsonl(run / "manifest.jsonl", manifests)
-    for name in ("expert.json", "standard_catalog.json"):
+    for name in (("standard_catalog.json",) if text_mode else ("expert.json", "standard_catalog.json")):
         shutil.copy2(baseline / name, run / name)
-    for name in ("reference_expert", "standards"):
+    if text_mode:
+        write_json(run / "stage_criteria.json", criteria)
+    for name in (() if text_mode else ("reference_expert", "standards")):
         if not (run / name).exists():
             # The review server confines assets to this run/episode. Copying
             # keeps those checks intact and makes the new run independently viewable.

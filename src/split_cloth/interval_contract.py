@@ -200,13 +200,97 @@ def _input_indices(nodes: Any, intervals: Any, frame_count: int, errors: list[st
     return by_node, by_interval
 
 
-def normalize_interval_selection(raw: Any, nodes: Any, intervals: Any, manifest: Any) -> dict:
+def _temporal_validation(response, by_node, by_interval, by_observation, frame_count, applicable):
+    """Check model claims against all intervals, without inventing boundaries.
+
+    Preparation, adjustment and uncertain observations never advance the stage.
+    An opening alone does not advance it either. Known folding activities must
+    agree with the selected stage ranges; uncertain boundaries defer checks
+    whose limits cannot be established. This checks claim consistency, not the
+    truth of a visual interpretation.
+    """
+    findings = []
+    interval_ids = list(by_interval)
+    observations = response.get("interval_observations")
+    observations = observations if type(observations) is list else []
+    observed_ids = [item.get("interval_id") if type(item) is dict else None for item in observations]
+    order_valid = observed_ids == interval_ids
+    if not order_valid:
+        findings.append("temporal_order: interval observations must follow the complete supplied interval order")
+    summary = {
+        "enabled": True, "status": "passed", "observation_order_valid": order_valid,
+        "checked_interval_ids": interval_ids, "stage_coverage": [],
+        "observed_activity_sequence": [], "deferred_stage_ids": [], "findings": findings,
+        "interpretation": "Temporal consistency of model claims only; not verified visual accuracy. Unresolved node limits are deferred, never inferred.",
+    }
+    if not applicable:
+        summary["status"] = "needs_review" if findings else "not_applicable"
+        return summary
+    ends = response.get("stage_end_nodes")
+    ends = ends if type(ends) is list else []
+    end_frames = []
+    for index in range(3):
+        item = ends[index] if index < len(ends) and type(ends[index]) is dict else {}
+        node_id = item.get("node_id")
+        node = by_node.get(node_id) if type(node_id) is str else None
+        end_frames.append(node["source_frame_id"] if node is not None else None)
+    activities = ("first_fold", "second_fold", "cross_fold", "remove")
+    ranks = {activity: index + 1 for index, activity in enumerate(activities)}
+    ranges = {}
+    for stage, activity in enumerate(activities, start=1):
+        lower = 0 if stage == 1 else (end_frames[stage - 2] + 1 if end_frames[stage - 2] is not None else None)
+        upper = frame_count - 1 if stage == 4 else end_frames[stage - 1]
+        fully_known = lower is not None and upper is not None and lower <= upper
+        ranges[stage] = (lower, upper)
+        members = [interval for interval in by_interval.values() if fully_known
+                   and lower <= interval["start_frame"] <= interval["end_frame"] <= upper]
+        completed = [interval["interval_id"] for interval in members
+                     if by_observation.get(interval["interval_id"], {}).get("activity") == activity
+                     and by_observation.get(interval["interval_id"], {}).get("operation_complete") is True
+                     and str(by_observation.get(interval["interval_id"], {}).get("evidence_text", "")).strip()]
+        summary["stage_coverage"].append({
+            "stage_id": stage, "expected_activity": activity,
+            "start_frame": lower, "end_frame": upper, "range_fully_known": fully_known,
+            "interval_ids": [interval["interval_id"] for interval in members],
+            "completed_activity_interval_ids": completed,
+        })
+        if not fully_known:
+            summary["deferred_stage_ids"].append(stage)
+        elif not completed:
+            findings.append(f"temporal_order: stage {stage} requires completed {activity} evidence within its selected range")
+    highest_rank = 0
+    highest_interval_id = None
+    for interval_id, interval in by_interval.items():
+        observation = by_observation.get(interval_id, {})
+        activity = observation.get("activity")
+        if type(activity) is not str or activity not in ranks:
+            continue
+        stage = ranks[activity]
+        summary["observed_activity_sequence"].append({
+            "interval_id": interval_id, "activity": activity,
+            "operation_complete": observation.get("operation_complete") is True,
+        })
+        if stage < highest_rank:
+            findings.append(f"temporal_order: {interval_id} {activity} regresses after stage {highest_rank} activity in {highest_interval_id}")
+        if stage > highest_rank:
+            highest_rank, highest_interval_id = stage, interval_id
+        lower, upper = ranges[stage]
+        if ((lower is not None and interval["start_frame"] < lower)
+                or (upper is not None and interval["end_frame"] > upper)):
+            findings.append(f"temporal_order: {interval_id} {activity} lies outside selected stage {stage} range")
+    summary["status"] = "needs_review" if findings else ("deferred" if summary["deferred_stage_ids"] else "passed")
+    return summary
+
+
+def normalize_interval_selection(raw: Any, nodes: Any, intervals: Any, manifest: Any, *, temporal_order: bool = False) -> dict:
     """Return safe labels, retaining unresolved candidates for review.
 
     Three selected fixed nodes must be increasing eligible opening nodes. Each
     stage needs evidence of its own folding operation and of completion in the
     interval ending at the chosen node. Stage 4 completion refers to the end of
     an observed interval; it does not claim a precise first completion frame.
+    Optional temporal checks evaluate every interval's claims, including those
+    omitted from boundary evidence. The default retains legacy acceptance.
     """
     errors = validate_interval_selection(raw)
     if type(manifest) is not dict:
@@ -331,6 +415,16 @@ def normalize_interval_selection(raw: Any, nodes: Any, intervals: Any, manifest:
             errors.append("stage4_completion: completed remove activity evidence is required")
         if not str(completion_raw.get("evidence_text", "")).strip() or not str(completion_observation.get("evidence_text", "")).strip():
             errors.append("stage4_completion: nonempty visual evidence is required")
+    temporal_validation = {
+        "enabled": False, "status": "disabled", "findings": [],
+        "interpretation": "Legacy normalization; optional temporal consistency checks were not enabled.",
+    }
+    if type(temporal_order) is not bool:
+        errors.append("temporal_order: expected boolean configuration")
+        temporal_validation["status"] = "invalid_configuration"
+    elif temporal_order:
+        temporal_validation = _temporal_validation(response, by_node, by_interval, by_observation, frame_count, check_semantics)
+        errors.extend(temporal_validation["findings"])
     errors = list(dict.fromkeys(errors))
     status = "needs_review" if errors else ("out_of_scope" if out_of_scope else "accepted")
     candidate_frames = [boundary["end_frame"] for boundary in boundaries]
@@ -357,6 +451,7 @@ def normalize_interval_selection(raw: Any, nodes: Any, intervals: Any, manifest:
         "machine_review_reasons": errors,
         "out_of_scope_reason": "task type or applicability is outside the four-stage cloth specification" if status == "out_of_scope" else None,
         "interval_observations": deepcopy(observations),
+        "temporal_validation": temporal_validation,
         "boundaries": boundaries, "candidate_boundary_frames": candidate_frames,
         "boundary_frames": accepted_frames, "segments": segments,
         "stage4_completion": {

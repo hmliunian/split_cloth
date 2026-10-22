@@ -35,10 +35,11 @@ def fixture():
 
 
 class IntervalContractTests(unittest.TestCase):
-    def normalize(self, raw=None, nodes=None, intervals=None, manifest=None):
+    def normalize(self, raw=None, nodes=None, intervals=None, manifest=None, *, temporal_order=False):
         defaults = fixture()
         return normalize_interval_selection(*[default if supplied is None else supplied
-                                              for supplied, default in zip((raw, nodes, intervals, manifest), defaults)])
+                                              for supplied, default in zip((raw, nodes, intervals, manifest), defaults)],
+                                            temporal_order=temporal_order)
 
     def assert_review(self, annotation, reason=None):
         self.assertEqual(annotation["status"], "needs_review", annotation["review_reasons"])
@@ -231,6 +232,133 @@ class IntervalContractTests(unittest.TestCase):
         inputs = fixture()
         original = deepcopy(inputs)
         normalize_interval_selection(*inputs)
+        self.assertEqual(inputs, original)
+
+    def test_temporal_mode_accepts_repeated_activity_across_multiple_intervals(self):
+        annotation = self.normalize(temporal_order=True)
+        self.assertEqual(annotation["status"], "accepted", annotation["review_reasons"])
+        validation = annotation["temporal_validation"]
+        self.assertEqual(validation["status"], "passed")
+        self.assertEqual(validation["stage_coverage"][1]["interval_ids"], ["i2", "i3"])
+        self.assertEqual(validation["stage_coverage"][1]["completed_activity_interval_ids"], ["i3"])
+
+    def test_legacy_default_does_not_change_acceptance(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][0]["activity"] = "cross_fold"
+        annotation = self.normalize(raw=raw)
+        self.assertEqual(annotation["status"], "accepted")
+        self.assertEqual(annotation["temporal_validation"]["status"], "disabled")
+        self.assertFalse(annotation["temporal_validation"]["enabled"])
+
+    def test_temporal_mode_checks_unreferenced_intervals(self):
+        raw, *_ = fixture()
+        raw["stage_end_nodes"][0]["evidence_interval_ids"] = ["i1"]
+        raw["interval_observations"][0]["activity"] = "cross_fold"
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assert_review(annotation, "i0 cross_fold lies outside selected stage 3 range")
+        self.assertTrue(any("regresses" in reason for reason in annotation["review_reasons"]))
+
+    def test_temporal_mode_requires_fold_itself_to_be_complete(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][2]["operation_complete"] = False
+        raw["interval_observations"][3]["activity"] = "other"
+        self.assertEqual(self.normalize(raw=raw)["status"], "accepted")
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assert_review(annotation, "stage 2 requires completed second_fold evidence")
+        self.assertEqual(annotation["candidate_boundary_frames"], [422, 600, 800])
+
+    def test_completed_fold_requires_nonempty_visual_evidence(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][2]["operation_complete"] = True
+        raw["interval_observations"][2]["evidence_text"] = "  "
+        raw["interval_observations"][3]["activity"] = "other"
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assert_review(annotation, "stage 2 requires completed second_fold evidence")
+
+    def test_temporal_mode_rejects_fold_activity_after_its_selected_end(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][2]["activity"] = "first_fold"
+        self.assertEqual(self.normalize(raw=raw)["status"], "accepted")
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assert_review(annotation, "i2 first_fold lies outside selected stage 1 range")
+
+    def test_temporal_mode_rejects_reversed_folding_order(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][0]["activity"] = "second_fold"
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assert_review(annotation, "i1 first_fold regresses after stage 2 activity in i0")
+
+    def test_temporal_mode_requires_chronological_observation_order(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][0], raw["interval_observations"][1] = raw["interval_observations"][1], raw["interval_observations"][0]
+        self.assertEqual(self.normalize(raw=raw)["status"], "accepted")
+        self.assert_review(self.normalize(raw=raw, temporal_order=True), "complete supplied interval order")
+
+    def test_prepare_other_unknown_do_not_advance_stage(self):
+        for activity in ("prepare", "other", "unknown"):
+            with self.subTest(activity=activity):
+                raw, *_ = fixture()
+                raw["interval_observations"][2]["activity"] = activity
+                annotation = self.normalize(raw=raw, temporal_order=True)
+                self.assertEqual(annotation["status"], "accepted", annotation["review_reasons"])
+                self.assertEqual(annotation["boundary_frames"], [422, 600, 800])
+
+    def test_multiple_first_fold_intervals_do_not_create_another_stage(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][0].update(activity="first_fold", operation_complete=False)
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assertEqual(annotation["status"], "accepted", annotation["review_reasons"])
+        self.assertEqual(annotation["boundary_frames"], [422, 600, 800])
+
+    def test_preparation_opening_node_is_not_forced_as_stage_end(self):
+        _, nodes, *_ = fixture()
+        self.assertEqual(nodes[0]["source_frame_id"], 100)
+        self.assertTrue(nodes[0]["eligible_stage_end"])
+        annotation = self.normalize(temporal_order=True)
+        self.assertEqual(annotation["status"], "accepted", annotation["review_reasons"])
+        self.assertEqual(annotation["boundary_frames"][0], 422)
+
+    def test_unresolved_boundary_is_deferred_and_candidates_retained(self):
+        raw, *_ = fixture()
+        raw["stage_end_nodes"][1]["node_id"] = None
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assert_review(annotation, "unresolved")
+        self.assertEqual(annotation["candidate_boundary_frames"], [422, 800])
+        validation = annotation["temporal_validation"]
+        self.assertEqual(validation["status"], "deferred")
+        self.assertEqual(validation["deferred_stage_ids"], [2, 3])
+        self.assertIsNone(validation["stage_coverage"][1]["end_frame"])
+        self.assertIsNone(validation["stage_coverage"][2]["start_frame"])
+        self.assertFalse(any("requires completed second_fold" in reason for reason in validation["findings"]))
+
+    def test_temporal_mode_does_not_force_nonapplicable_into_folding_order(self):
+        raw, *_ = fixture()
+        raw.update(task_type="hang_cloth", applicable=False, all_stages_observed=False)
+        for item in raw["stage_end_nodes"]:
+            item.update(node_id=None, participant_arms=[], evidence_interval_ids=[], evidence_text="")
+        raw["stage4_completion"].update(observed=False, interval_id=None, evidence_text="")
+        annotation = self.normalize(raw=raw, temporal_order=True)
+        self.assertEqual(annotation["status"], "out_of_scope", annotation["review_reasons"])
+        self.assertEqual(annotation["temporal_validation"]["status"], "not_applicable")
+
+    def test_temporal_mode_does_not_allow_new_model_fields(self):
+        raw, *_ = fixture()
+        raw["interval_observations"][0]["stage_state_before"] = "prepare"
+        self.assert_review(self.normalize(raw=raw, temporal_order=True), "unexpected fields")
+
+    def test_temporal_mode_configuration_must_be_boolean(self):
+        self.assert_review(self.normalize(temporal_order="false"), "expected boolean configuration")
+
+    def test_temporal_mode_invalid_shapes_do_not_raise(self):
+        for raw in (None, [], "{}", {"task_type": []}, {"stage_end_nodes": [None, 5, []]}):
+            with self.subTest(raw=raw):
+                annotation = normalize_interval_selection(raw, *fixture()[1:], temporal_order=True)
+                self.assert_review(annotation)
+
+    def test_temporal_mode_preserves_input_objects(self):
+        inputs = fixture()
+        original = deepcopy(inputs)
+        normalize_interval_selection(*inputs, temporal_order=True)
         self.assertEqual(inputs, original)
 
 

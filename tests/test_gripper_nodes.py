@@ -44,6 +44,63 @@ class TestGripperNodes(unittest.TestCase):
         self.assertEqual(result["nodes"][1]["changes"][0]["kind"], "close")
         self.assertEqual(result["nodes"][1]["closed_arms"], ["left"])
 
+    def test_all_transitions_remains_default_with_original_node_ids(self):
+        values = [0] * 6 + [1] * 6 + [0] * 6 + [1] * 6
+        default = detect(values)
+        explicit = detect(values, node_policy="all_transitions")
+        self.assertEqual(default, explicit)
+        self.assertEqual([node["source_frame_id"] for node in default["nodes"]], [6, 12, 18])
+        self.assertEqual([node["node_id"] for node in default["nodes"]], ["a0001", "a0002", "a0003"])
+
+    def test_any_open_only_uses_openings_and_does_not_repeat_sustained_open(self):
+        values = [0] * 6 + [1] * 30 + [0] * 6 + [1] * 30
+        result = detect(values, node_policy="any_open")
+        self.assertEqual([node["source_frame_id"] for node in result["nodes"]], [6, 42])
+        self.assertEqual([node["node_id"] for node in result["nodes"]], ["a0001", "a0002"])
+        self.assertTrue(all(node["eligible_stage_end"] for node in result["nodes"]))
+        self.assertTrue(all(change["kind"] == "open" for node in result["nodes"] for change in node["changes"]))
+        self.assertEqual(result["calibration"]["node_policy"], "any_open")
+        self.assertEqual(result["calibration"]["node_trigger"], "either_arm_settled_opening")
+        self.assertTrue(result["calibration"]["other_arm_state_is_metadata_only"])
+        self.assertFalse(result["calibration"]["physical_full_open_calibrated"])
+
+    def test_any_open_keeps_either_hand_even_when_other_hand_is_closed(self):
+        left = [0] * 6 + [1] * 6 + [0] * 12
+        right = [0] * 12 + [1] * 6 + [0] * 6
+        result = detect(left, right, node_policy="any_open")
+        self.assertEqual([node["source_frame_id"] for node in result["nodes"]], [6, 12])
+        first, second = result["nodes"]
+        self.assertEqual(first["open_arms"], ["left"])
+        self.assertEqual(first["closed_arms"], ["right"])
+        self.assertEqual(second["open_arms"], ["right"])
+        self.assertEqual(second["closed_arms"], ["left"])
+        self.assertEqual([change["arm"] for change in second["changes"]], ["right"])
+        self.assertTrue(first["eligible_stage_end"] and second["eligible_stage_end"])
+
+    def test_any_open_other_arm_unknown_does_not_remove_an_opening(self):
+        result = detect([0] * 6 + [1] * 6, [68] * 12, node_policy="any_open")
+        self.assertEqual(len(result["nodes"]), 1)
+        self.assertEqual(result["nodes"][0]["unknown_arms"], ["right"])
+        self.assertTrue(result["nodes"][0]["eligible_stage_end"])
+
+    def test_any_open_preserves_both_independent_hand_openings_and_same_frame_merge(self):
+        left = [0] * 6 + [1] * 12
+        delayed = detect(left, [0] * 8 + [1] * 10, node_policy="any_open")["nodes"]
+        self.assertEqual([node["source_frame_id"] for node in delayed], [6, 8])
+        self.assertEqual([node["changes"][0]["arm"] for node in delayed], ["left", "right"])
+        same = detect(left, left, node_policy="any_open")["nodes"]
+        self.assertEqual(len(same), 1)
+        self.assertEqual({change["arm"] for change in same[0]["changes"]}, {"left", "right"})
+
+    def test_any_open_initial_open_and_later_closing_create_no_nodes(self):
+        result = detect([1] * 6 + [0] * 6, node_policy="any_open")
+        self.assertEqual(result["nodes"], [])
+
+    def test_invalid_node_policy_is_rejected(self):
+        for policy in (None, "opening", "both_open", ""):
+            with self.subTest(policy=policy), self.assertRaisesRegex(ValueError, "node_policy"):
+                detect([0] * 6 + [1] * 6, node_policy=policy)
+
     def test_partial_open_plateau_and_its_closing_remain_candidates(self):
         result = detect([0] * 6 + [.3] * 6 + [0] * 6 + [1] * 6)
         self.assertEqual([item["source_frame_id"] for item in result["nodes"]], [6, 12, 18])
@@ -175,6 +232,14 @@ class TestGripperNodes(unittest.TestCase):
         self.assertEqual(result["calibration"]["state_column"], "observation.state")
         self.assertEqual(result["calibration"]["signal_source"], "measured_state_only")
         self.assertEqual(result["nodes"][0]["source_frame_id"], 6)
+
+    def test_prepare_forwards_any_open_policy_without_model_input(self):
+        states, times, indices = episode([0] * 6 + [1] * 6 + [0] * 6)
+        table = {"observation.state": states, "timestamp": times, "frame_index": indices}
+        with patch("split_cloth.gripper_nodes._read_measured_parquet", return_value=(table, "observation.state")):
+            result = prepare_gripper_nodes("episode.parquet", times, node_policy="any_open")
+        self.assertEqual([node["source_frame_id"] for node in result["nodes"]], [6])
+        self.assertEqual(result["nodes"][0]["evidence"]["node_policy"], "any_open")
 
     def test_invalid_settling_options_are_rejected(self):
         for options in ({"settled_samples": True}, {"settled_samples": 1},

@@ -124,3 +124,5 @@ RUN=pilot_100_20261022_v2
 - [runbook.md](runbook.md)：原运行与交付计划。
 
 原规格中的后续设想不表示已实现；实际能力以本 README、IMPLEMENTATION 和 CLI `--help` 为准。
+
+最新对照：[文字判据与任一夹爪张开节点](TEXT_CRITERIA_EXPERIMENT.md)。VLM 输入不再含参考图片，使用 GPT 离线文字判据、TARGET 区间时序和全区间一致性检查；六条实测与视觉疑点均保留。

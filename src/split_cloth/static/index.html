@@ -52,8 +52,8 @@
               </div>
             </section>
             <section class="card expert-card">
-              <div class="card-title"><div><span class="eyebrow">REFERENCE</span><h3>Expert 示范</h3></div><select id="expert-select" aria-label="选择 expert 示范"><option value="">暂无示范</option></select></div>
-              <p class="hint">示范用于对照阶段语义，动作时长和边界位置可能不同。</p>
+              <div class="card-title"><div><span class="eyebrow">REFERENCE</span><h3 id="reference-title">Expert 示范</h3></div><select id="expert-select" aria-label="选择 expert 示范"><option value="">暂无示范</option></select></div>
+              <p id="reference-hint" class="hint">示范用于对照阶段语义，动作时长和边界位置可能不同。</p>
               <div id="expert-content" class="expert-content"><p class="muted">当前运行尚未配置已标注示范。</p></div>
             </section>
             <section class="card evidence-card"><div class="card-title"><div><span class="eyebrow">MODEL EVIDENCE</span><h3>模型输出与 GPT 复核</h3></div></div><div class="evidence-columns"><div><h4>Qwen 标注</h4><div id="model-summary"></div><details><summary>查看完整输出</summary><pre id="model-json"></pre></details></div><div><h4>GPT 复核</h4><div id="review-summary"></div><details><summary>查看完整输出</summary><pre id="review-json"></pre></details></div></div></section>
