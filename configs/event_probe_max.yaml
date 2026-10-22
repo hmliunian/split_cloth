@@ -1,0 +1,25 @@
+spec_version: gripper_event_visual_v1
+precision: source_frame_visual_proposal
+camera_key: base_0_rgb
+sample_fps: 1.0
+provider:
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model_id: qwen3.8-max-0902
+  credential_file: Qwen_api.txt
+  temperature: 0
+  max_output_tokens: 3072
+  timeout_s: 180
+  max_attempts: 3
+  max_images: 30
+  max_inflight: 2
+events:
+  window_padding_s: 0.75
+  max_candidate_pages: 16
+  detector:
+    levels:
+      - [0.5, 0.25]
+      - [0.75, 0.45]
+      - [0.9, 0.65]
+    grouping_window_s: 0.25
+    stable_samples: 2
+    stable_duration_s: 0.05

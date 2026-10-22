@@ -1,5 +1,7 @@
 # Split Cloth 标注与复核
 
+新增夹爪事件实验分支及6条同模型实测见 [EVENT_EXPERIMENT.md](EVENT_EXPERIMENT.md)。当前全局事件候选方案出现阶段语义误选，尚不适合批量标注；原1 FPS流程继续作为独立基线。
+
 用 Qwen 根据文字阶段定义、标准图和已标注示范，为折衣轨迹生成四阶段粗标签；在本地浏览器查看远程服务器上的视频、网格图、模型结果和人工修正。
 
 当前项目位于 `h100-jackson:/gpfs/jiuquyun/home/jackson/xuran_projects/split_cloth`。本轮运行是 `pilot_100_20261022_v2`，调用百炼兼容接口的 `qwen3-vl-plus`。软件在 CPU 上准备图像和运行 GUI，推理由 API 完成，无需本地 GPU。

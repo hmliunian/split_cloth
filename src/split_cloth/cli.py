@@ -16,17 +16,19 @@ def main():
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--config", type=Path)
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ["select", "prepare", "annotate", "register-expert", "summary", "evaluate-gpt", "compare"]:
+    for name in ["select", "prepare", "annotate", "register-expert", "summary", "evaluate-gpt", "compare", "event-probe"]:
         p = subs.add_parser(name)
         p.add_argument("--run", required=True)
         if name == "prepare":
             p.add_argument("--expert-only", action="store_true")
-        if name == "annotate":
+        if name in ("annotate", "event-probe"):
             p.add_argument("--limit", type=int)
         if name == "register-expert":
             p.add_argument("--review", type=Path, required=True)
-        if name == "compare":
+        if name in ("compare", "event-probe"):
             p.add_argument("--baseline", required=True)
+        if name == "event-probe":
+            p.add_argument("--prepare-only", action="store_true", help="Prepare event evidence and payload inventory without model calls")
     server = subs.add_parser("serve")
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8765)
@@ -58,6 +60,10 @@ def main():
     elif args.command == "compare":
         from .comparison import compare_runs
         result = compare_runs(project / "runs" / args.baseline, run)
+        print(json.dumps({k: v for k, v in result.items() if k != "episodes"}, ensure_ascii=False))
+    elif args.command == "event-probe":
+        from .event_probe import run_event_probe
+        result = run_event_probe(project, run, project / "runs" / args.baseline, config, args.limit, args.prepare_only)
         print(json.dumps({k: v for k, v in result.items() if k != "episodes"}, ensure_ascii=False))
 
 
