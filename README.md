@@ -1,5 +1,7 @@
 # Split Cloth 标注与复核
 
+按用户指定“固定夹爪节点→每区间1 FPS拼图→AI只选节点”实现与6条实测见 [INTERVAL_EXPERIMENT.md](INTERVAL_EXPERIMENT.md)。[打开本轮复核GUI](http://127.0.0.1:18766/?run_id=interval_nodes_max_paired6_20261022&key=fold_cloth_v4__episode_002768)。
+
 新增夹爪事件实验分支及6条同模型实测见 [EVENT_EXPERIMENT.md](EVENT_EXPERIMENT.md)。当前全局事件候选方案出现阶段语义误选，尚不适合批量标注；原1 FPS流程继续作为独立基线。
 
 用 Qwen 根据文字阶段定义、标准图和已标注示范，为折衣轨迹生成四阶段粗标签；在本地浏览器查看远程服务器上的视频、网格图、模型结果和人工修正。

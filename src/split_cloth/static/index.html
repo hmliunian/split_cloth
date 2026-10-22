@@ -39,15 +39,16 @@
           <div class="visual-column">
             <section class="card viewer-card" aria-label="视频与帧浏览">
               <div class="card-toolbar"><div class="segmented" role="tablist" aria-label="查看方式"><button id="mode-video" class="active" role="tab" aria-selected="true">视频</button><button id="mode-frame" role="tab" aria-selected="false">原始帧</button><button id="mode-grid" role="tab" aria-selected="false">时序网格</button></div><span class="muted small-text">主视角</span></div>
-              <div id="video-view" class="visual-stage"><video id="video" controls playsinline preload="metadata"></video><div id="video-unavailable" class="media-message" hidden>暂无可播放预览，可使用「原始帧」或「时序网格」查看。</div></div>
+              <div id="video-view" class="visual-stage"><video id="video" controls playsinline preload="metadata"></video><div id="video-unavailable" class="media-message" hidden>暂无可播放预览，可使用「原始帧」或「时序网格」查看。</div><div class="frame-overlay" id="video-stage-overlay" aria-live="off"></div></div>
               <div id="frame-view" class="visual-stage" hidden><img id="frame-image" alt="当前原始视频帧"><span id="frame-image-message" class="media-message" hidden></span><div class="frame-overlay" id="frame-overlay"></div></div>
               <div id="grid-view" class="grid-view" hidden><div id="grid-page-controls" class="grid-page-controls"></div><div id="grid-image-wrap" class="grid-image-wrap"><img id="grid-image" alt="按时间顺序排列的采样网格图"></div><p class="media-caption" id="grid-caption"></p></div>
               <div class="transport">
                 <div class="frame-controls"><button class="button compact" id="back-frame" title="上一帧（←）">−1 帧</button><button class="button compact" id="forward-frame" title="下一帧（→）">+1 帧</button><label class="frame-jump">原始帧 <input id="frame-number" type="number" min="0" step="1" value="0"></label><button type="button" class="button compact" id="jump-frame">跳转</button><span id="frame-time" class="mono">0.000 s</span><span id="current-stage" class="badge neutral">阶段未知</span></div>
                 <input id="frame-slider" type="range" min="0" max="0" value="0" step="1" aria-label="原始视频帧">
                 <div class="timeline" id="timeline" aria-label="阶段时间线"></div><div class="timeline-labels"><span>0 s</span><span id="timeline-end">—</span></div>
+                <div id="candidate-node-controls" class="candidate-node-controls" aria-label="AI 候选阶段结束节点"></div>
                 <div class="stage-legend"><span><i class="s1"></i>阶段 1</span><span><i class="s2"></i>阶段 2</span><span><i class="s3"></i>阶段 3</span><span><i class="s4"></i>阶段 4</span><span class="muted">完成帧仍属于前一阶段</span></div>
-                <p id="timeline-hint" class="hint">未确认的结果显示为未知阶段。</p>
+                <p id="timeline-hint" class="hint">虚线色段为 AI 候选阶段（未确认），灰色段为后续阶段未确定。</p>
               </div>
             </section>
             <section class="card expert-card">

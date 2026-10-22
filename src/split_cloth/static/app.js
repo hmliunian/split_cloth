@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const S = { run: "", episodes: [], detail: null, key: "", frame: 0, mode: "video", page: 0, dirty: false, saving: false, version: 0, experts: [], listRequest: 0, detailRequest: 0, datasets: new Set(), frameTimer: null, searchTimer: null };
 const LABELS = { accepted: "模型已接受", needs_review: "待复核", approved: "人工已确认", corrected: "人工已修正", out_of_scope: "不适用", failed: "处理失败", pending: "待处理", error: "处理失败", rejected: "未通过", passed: "复核通过", pass: "复核通过", complete: "已完成", completed: "已完成" };
 const STAGE_COLORS = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)"];
+const ACTIVITY_LABELS = { prepare: "取衣 / 展开 / 铺平", first_fold: "第一侧纵折", second_fold: "第二侧纵折", cross_fold: "横折", remove: "移除", other: "其他", unknown: "无法判断" };
 
 function el(tag, className, content) { const e = document.createElement(tag); if (className) e.className = className; if (content !== undefined && content !== null) e.textContent = String(content); return e; }
 function replace(target, children = []) { target.replaceChildren(...children); }
@@ -25,7 +26,19 @@ function humanReview() { const d = S.detail || {}; return d.human_review || ((d.
 function gptReview() { const d = S.detail || {}; return d.gpt_review || d.validation || d.model_review || (d.review && d.review !== humanReview() ? d.review : null); }
 function frameCount() { return Math.max(0, Number(manifest().frame_count) || 0); }
 function fps() { return Math.max(0.001, Number(manifest().source_fps || manifest().fps) || 1); }
-function boundaryFrames(source = annotation()) { const raw = (Array.isArray(source.boundary_frames) && source.boundary_frames.length ? source.boundary_frames : source.boundaries || source.stage_boundaries || []); if (!Array.isArray(raw)) return []; return raw.slice(0, 3).map((b) => { if (typeof b === "number") return b; if (typeof b === "object" && b) { const value = b.coarse_end_frame ?? b.frame ?? b.boundary_frame ?? b.end_frame ?? b.right_frame ?? b.anchor_frame ?? b.R_frame ?? b.right?.frame_id ?? b.right?.frame; return isInt(value) ? Number(value) : null; } return isInt(b) ? Number(b) : null; }); }
+function boundaryFrames(source = annotation()) {
+  const raw = Array.isArray(source.boundary_frames) && source.boundary_frames.length ? source.boundary_frames : source.boundaries || source.stage_boundaries || [];
+  if (!Array.isArray(raw) || !raw.length) return [];
+  const result = [null, null, null];
+  raw.forEach((b, index) => {
+    const stage = b && typeof b === "object" ? b.from_stage ?? b.stage_id : null;
+    const slot = stage !== null && stage !== undefined ? Number(stage) - 1 : index;
+    if (!Number.isInteger(slot) || slot < 0 || slot > 2) return;
+    const value = b && typeof b === "object" ? b.coarse_end_frame ?? b.frame ?? b.boundary_frame ?? b.end_frame ?? b.right_frame ?? b.anchor_frame ?? b.R_frame ?? b.right?.frame_id ?? b.right?.frame : b;
+    result[slot] = isInt(value) ? Number(value) : null;
+  });
+  return result;
+}
 function completionFrame(source = annotation()) { const value = source.stage4_completion_frame ?? source.completion_frame ?? source.stage4_completion?.source_frame_id ?? source.stage4_completion?.frame ?? source.stage4_completion?.end_frame; return isInt(value) ? Number(value) : null; }
 function validBoundaries(bs) { const fc = frameCount(); return bs.length === 3 && bs.every((b, i) => Number.isInteger(b) && b >= 0 && b < fc - 1 && (!i || b > bs[i - 1])); }
 function effectiveBoundaries() { const h = humanReview(); const a = annotation(); return h?.boundary_frames ? boundaryFrames(h) : boundaryFrames(a); }
@@ -55,12 +68,125 @@ function renderDetail() {
 function renderBoundaries() { const h = humanReview(), bs = effectiveBoundaries(); replace($("boundary-fields")); for (let i = 0; i < 3; i++) { const field = el("div"); const label = el("label", "boundary-label"); label.htmlFor = `boundary-${i}`; const dot = el("i", `stage-dot s${i + 1}`); label.append(dot, document.createTextNode(`阶段 ${i + 1} 结束帧`)); const controls = el("div", "boundary-input"); const input = el("input"); input.type = "number"; input.min = "0"; input.max = String(frameCount() - 1); input.step = "1"; input.id = `boundary-${i}`; input.value = Number.isInteger(bs[i]) ? String(bs[i]) : ""; input.placeholder = "待确认"; const seek = el("button", "button compact", "定位"); seek.type = "button"; seek.onclick = () => { if (input.value !== "") { setMode("frame"); setFrame(Number(input.value)); } }; const use = el("button", "button compact", "取当前帧"); use.type = "button"; use.onclick = () => { input.value = String(S.frame); updateBoundaryTime(i); dirty(); }; const time = el("div", "boundary-time"); time.id = `boundary-time-${i}`; input.oninput = () => { updateBoundaryTime(i); dirty(); }; controls.append(input, seek, use); field.append(label, controls, time); $("boundary-fields").append(field); updateBoundaryTime(i); }
   const complete = completionFrame(h || annotation()); $("completion-frame").value = complete === null ? "" : String(complete); $("completion-frame").max = String(frameCount() - 1); $("review-status").value = ["approved", "corrected", "out_of_scope", "needs_review"].includes(h?.status) ? h.status : "needs_review"; $("review-note").value = h?.note || ""; const raw = annotation().boundaries || []; const estimates = []; if (Array.isArray(raw)) for (let i = 0; i < Math.min(3, raw.length); i++) { const b = raw[i]; if (typeof b !== "object" || !b) continue; const interval = b.estimated_boundary_interval_frames || b.uncertainty_frame_interval || b.estimated_frame_interval || b.interval_frames || b.uncertainty_interval || b.uncertainty_frames; if (Array.isArray(interval)) estimates.push(el("p", "", `边界 ${i + 1} 估计区间：${interval.join("–")} 帧`)); } replace($("boundary-estimates"), estimates); }
 function updateBoundaryTime(i) { const value = $(`boundary-${i}`)?.value; const target = $(`boundary-time-${i}`); if (target) target.textContent = value === "" ? "尚未确定" : `${fmtTime(Number(value) / fps())} · 下一阶段从 ${Number(value) + 1} 帧开始`; }
-function renderTimeline() { const fc = frameCount(); if (!approvedStages()) { const segment = el("span", "timeline-segment unknown"); segment.style.flex = "1"; replace($("timeline"), [segment]); $("timeline-hint").textContent = "当前结果尚未确认，时间线显示为未知阶段。模型原始边界可在右侧检查。"; return; } const bs = effectiveBoundaries(); const ends = [...bs, fc - 1]; let begin = 0; const segs = ends.map((end, i) => { const start = begin; const btn = el("button", "timeline-segment"); btn.type = "button"; btn.style.flex = String(end - start + 1); btn.style.background = STAGE_COLORS[i]; btn.title = `阶段 ${i + 1}：${start}–${end} 帧`; btn.setAttribute("aria-label", btn.title); btn.onclick = () => setFrame(start); begin = end + 1; return btn; }); replace($("timeline"), segs); $("timeline-hint").textContent = "时间线显示已保存的模型候选或人工边界。模型已接受不代表人工验收；请同时查看 GPT 对照意见。"; }
+function visibleStageSegments() {
+  const fc = frameCount(), confirmed = approvedStages();
+  if (!fc) return [];
+  const bs = confirmed ? effectiveBoundaries() : boundaryFrames(annotation());
+  if (!confirmed && [annotation().status, humanReview()?.status].includes("out_of_scope")) return [{ start: 0, end: fc - 1, stage: null }];
+  const segments = []; let start = 0, knownStart = true;
+  for (let index = 0; index < 3; index++) {
+    const end = bs[index];
+    if (!Number.isInteger(end) || end < start || end >= fc - 1) { knownStart = false; continue; }
+    segments.push({ start, end, stage: knownStart ? index + 1 : null });
+    start = end + 1; knownStart = true;
+  }
+  if (start < fc) segments.push({ start, end: fc - 1, stage: validBoundaries(bs) ? 4 : null });
+  return segments;
+}
+function renderCandidateNodeControls() {
+  const target = $("candidate-node-controls"); if (!target) return;
+  const bs = boundaryFrames(annotation()), selections = intervalModelOutput().stage_end_nodes || [], boundaries = annotation().boundaries || [];
+  replace(target);
+  for (let stage = 1; stage <= 3; stage++) {
+    const selected = selections.find((item) => item.stage_id === stage), boundary = boundaries.find((item) => item && (item.from_stage ?? item.stage_id) === stage);
+    const nodeId = selected?.node_id ?? boundary?.node_id, frame = bs[stage - 1];
+    const button = el("button", "button compact candidate-node", `AI 阶段 ${stage} · ${nodeId || "节点未确定"}${isInt(frame) ? ` · f${frame}` : ""}`);
+    button.type = "button"; button.disabled = !isInt(frame);
+    button.title = isInt(frame) ? `查看候选结束帧 ${frame}（未人工确认）` : "该阶段尚未选择结束节点";
+    button.onclick = () => { setMode("frame"); setFrame(Number(frame)); };
+    target.append(button);
+  }
+}
+function renderTimeline() {
+  const confirmed = approvedStages(), segments = visibleStageSegments();
+  const segs = segments.map(({ start, end, stage }) => {
+    const btn = el(stage ? "button" : "span", `timeline-segment${stage ? confirmed ? "" : " candidate" : " unknown"}`);
+    btn.style.flex = String(end - start + 1);
+    btn.title = `${stage ? `${confirmed ? "阶段" : "AI 候选阶段"} ${stage}` : "后续阶段未确定"}：${start}–${end} 帧`;
+    btn.setAttribute("aria-label", btn.title);
+    if (stage) { btn.type = "button"; btn.style.backgroundColor = STAGE_COLORS[stage - 1]; btn.onclick = () => setFrame(start); }
+    return btn;
+  });
+  replace($("timeline"), segs); renderCandidateNodeControls();
+  $("timeline-hint").textContent = confirmed ? "时间线显示已保存的模型候选或人工边界。模型已接受不代表人工验收；请同时查看 GPT 对照意见。" : "虚线色段为 AI 候选阶段（未确认），灰色段为后续阶段未确定。点击下方节点可逐帧检查；候选结果尚未作为正式标签。";
+}
 function setMode(mode) { S.mode = mode; ["video", "frame", "grid"].forEach((v) => { $(`${v}-view`).hidden = v !== mode; $(`mode-${v}`).classList.toggle("active", v === mode); $(`mode-${v}`).setAttribute("aria-selected", String(v === mode)); }); if (mode !== "video") $("video").pause(); if (mode === "frame" && S.detail) loadFrameImage(); }
-function setFrame(value, fromVideo = false) { if (!S.detail) return; S.frame = Math.max(0, Math.min(Math.max(0, frameCount() - 1), Math.round(Number(value) || 0))); $("frame-number").value = String(S.frame); $("frame-slider").value = String(S.frame); $("frame-time").textContent = fmtTime(S.frame / fps()); $("frame-overlay").textContent = `Frame ${S.frame} · ${fmtTime(S.frame / fps())}`; const stage = approvedStages() ? effectiveBoundaries().filter((b) => S.frame > b).length + 1 : null; $("current-stage").textContent = stage ? `阶段 ${stage}` : "阶段未知"; $("current-stage").className = `badge${stage ? "" : " neutral"}`; $("current-stage").style.background = stage ? `color-mix(in srgb, ${STAGE_COLORS[stage - 1]} 15%, white)` : ""; $("current-stage").style.color = stage ? STAGE_COLORS[stage - 1] : ""; if (!fromVideo && $("video").hasAttribute("src") && Number.isFinite($("video").duration)) { const timestamp = Math.min(S.frame / fps(), Math.max(0, $("video").duration - .001)); if (Math.abs($("video").currentTime - timestamp) > .4 / fps()) $("video").currentTime = timestamp; } if (S.mode === "frame") { clearTimeout(S.frameTimer); S.frameTimer = setTimeout(loadFrameImage, 65); } }
+function setFrame(value, fromVideo = false) {
+  if (!S.detail) return;
+  S.frame = Math.max(0, Math.min(Math.max(0, frameCount() - 1), Math.round(Number(value) || 0)));
+  $("frame-number").value = String(S.frame); $("frame-slider").value = String(S.frame); $("frame-time").textContent = fmtTime(S.frame / fps());
+  const confirmed = approvedStages(), stage = visibleStageSegments().find((segment) => S.frame >= segment.start && S.frame <= segment.end)?.stage;
+  const label = stage ? `${confirmed ? "阶段" : "AI 候选阶段"} ${stage}` : "后续阶段待定";
+  const overlay = `Frame ${S.frame} · ${fmtTime(S.frame / fps())} · ${label}${!confirmed && stage ? "（未确认）" : ""}`;
+  $("frame-overlay").textContent = overlay; if ($("video-stage-overlay")) $("video-stage-overlay").textContent = overlay;
+  $("current-stage").textContent = label; $("current-stage").className = `badge${stage ? confirmed ? "" : " candidate-badge" : " neutral"}`;
+  $("current-stage").style.background = stage ? `color-mix(in srgb, ${STAGE_COLORS[stage - 1]} 15%, white)` : "";
+  $("current-stage").style.color = stage ? STAGE_COLORS[stage - 1] : "";
+  if (!fromVideo && $("video").hasAttribute("src") && Number.isFinite($("video").duration)) {
+    const timestamp = Math.min(S.frame / fps(), Math.max(0, $("video").duration - .001));
+    if (Math.abs($("video").currentTime - timestamp) > .4 / fps()) $("video").currentTime = timestamp;
+  }
+  if (S.mode === "frame") { clearTimeout(S.frameTimer); S.frameTimer = setTimeout(loadFrameImage, 65); }
+}
 function loadFrameImage() { if (!S.detail || S.mode !== "frame") return; const image = $("frame-image"); image.hidden = false; $("frame-image-message").hidden = true; image.onerror = () => { image.hidden = true; $("frame-image-message").textContent = "该帧读取失败，请检查视频源或切换相邻帧。"; $("frame-image-message").hidden = false; }; image.src = withRun("/api/frame", { key: S.key, frame: S.frame }); }
 function pageUrl(page) { return safeMediaUrl(typeof page === "string" ? page : page.url || page.image_url); }
-function renderGrid() { const pages = S.detail?.pages || []; replace($("grid-page-controls")); if (!pages.length) { $("grid-image").removeAttribute("src"); $("grid-image").hidden = true; $("grid-caption").textContent = "该轨迹尚未生成时序网格图。"; return; } S.page = Math.min(S.page, pages.length - 1); pages.forEach((p, i) => { const button = el("button", `button compact${i === S.page ? " active" : ""}`, `第 ${i + 1} 页`); button.onclick = () => { S.page = i; renderGrid(); }; $("grid-page-controls").append(button); }); const page = pages[S.page]; const url = pageUrl(page); $("grid-image").hidden = !url; if (url) $("grid-image").src = url; const range = page.start_time !== undefined && page.end_time !== undefined ? ` · ${page.start_time}–${page.end_time} s` : ""; $("grid-caption").textContent = `第 ${S.page + 1} / ${pages.length} 页${range} · 按从左到右、从上到下阅读 · 点击放大`; $("grid-image").onerror = () => { $("grid-image").hidden = true; $("grid-caption").textContent = "网格图加载失败，请刷新或检查文件是否存在。"; }; }
+function intervalModelOutput() { const source = S.detail?.model_annotation || S.detail?.original_annotation || annotation(); return S.detail?.model_output || source.model_output || annotation().model_output || source; }
+function intervalObservations() { return annotation().interval_observations || intervalModelOutput().interval_observations || []; }
+function selectInterval(intervalId) {
+  const pages = S.detail?.pages || [], index = pages.findIndex((page) => page.interval_id === intervalId);
+  if (index < 0) return;
+  S.page = index; setMode("grid"); renderGrid();
+  if (isInt(pages[index].start_frame)) setFrame(Number(pages[index].start_frame));
+}
+function renderGrid() {
+  const pages = S.detail?.pages || []; replace($("grid-page-controls"));
+  if (!pages.length) { $("grid-image").removeAttribute("src"); $("grid-image").hidden = true; $("grid-caption").textContent = "该轨迹尚未生成时序网格图。"; return; }
+  S.page = Math.max(0, Math.min(S.page, pages.length - 1));
+  pages.forEach((p, i) => {
+    const label = p.interval_id ? `${p.interval_id} · ${p.start_frame}–${p.end_frame} 帧 · 第 ${i + 1} 页` : `第 ${i + 1} 页`;
+    const button = el("button", `button compact${i === S.page ? " active" : ""}`, label);
+    button.onclick = () => { S.page = i; renderGrid(); if (isInt(p.start_frame)) setFrame(Number(p.start_frame)); };
+    $("grid-page-controls").append(button);
+  });
+  const page = pages[S.page], url = pageUrl(page);
+  $("grid-image").hidden = !url; if (url) $("grid-image").src = url;
+  const range = page.start_time !== undefined && page.end_time !== undefined ? ` · ${page.start_time}–${page.end_time} s` : "";
+  const details = [`第 ${S.page + 1} / ${pages.length} 页${range}`];
+  if (page.interval_id) {
+    details.push(`${page.interval_id} · 原始帧 ${page.start_frame}–${page.end_frame} · 右端节点 ${page.right_node_id || "视频末尾（无夹爪节点）"}`);
+    const observation = intervalObservations().find((item) => item.interval_id === page.interval_id);
+    if (observation) details.push(`AI：${ACTIVITY_LABELS[observation.activity] || observation.activity} · ${observation.operation_complete ? "该活动已完成" : "未确认完成"}${observation.evidence_text ? ` · ${observation.evidence_text}` : ""}`);
+  }
+  details.push("按从左到右、从上到下阅读 · 点击放大");
+  $("grid-caption").textContent = details.join("\n");
+  $("grid-image").onerror = () => { $("grid-image").hidden = true; $("grid-caption").textContent = "网格图加载失败，请刷新或检查文件是否存在。"; };
+}
+function appendIntervalEvidence(target) {
+  const model = intervalModelOutput(), observations = intervalObservations();
+  if (!Array.isArray(observations) || !observations.length) return;
+  const block = el("div"); block.append(el("h4", "", "固定节点选择 · AI 候选"));
+  const boundaries = annotation().boundaries || [], selections = model.stage_end_nodes || [];
+  for (let stage = 1; stage <= 3; stage++) {
+    const selected = selections.find((item) => item.stage_id === stage);
+    const boundary = boundaries.find((item) => item && (item.from_stage ?? item.stage_id) === stage);
+    const nodeId = selected?.node_id ?? boundary?.node_id;
+    const frame = boundary?.end_frame ?? boundary?.coarse_end_frame;
+    const arms = selected?.participant_arms || boundary?.participant_arms || [];
+    const armText = arms.map((arm) => ({ left: "左手", right: "右手" }[arm] || arm)).join("、") || "未确定";
+    const row = el("p"); row.append(el("span", "", `阶段 ${stage}：${nodeId || "未选择节点"} · ${isInt(frame) ? `原始帧 ${frame}` : "帧号未确定"} · 参与手：${armText} `));
+    if (isInt(frame)) { const seek = el("button", "button compact", "定位原始帧"); seek.type = "button"; seek.onclick = () => { setMode("frame"); setFrame(Number(frame)); }; row.append(seek); }
+    block.append(row);
+  }
+  const detail = el("details"); detail.append(el("summary", "", `逐区间 AI 判断（${observations.length} 段，点击查看拼图）`));
+  observations.forEach((observation) => {
+    const page = (S.detail?.pages || []).find((item) => item.interval_id === observation.interval_id);
+    const row = el("p"), button = el("button", "button compact", `${observation.interval_id}${page ? ` · ${page.start_frame}–${page.end_frame} 帧` : ""}`);
+    button.type = "button"; button.disabled = !page; button.onclick = () => selectInterval(observation.interval_id);
+    row.append(button, document.createTextNode(` ${ACTIVITY_LABELS[observation.activity] || observation.activity} · ${observation.operation_complete ? "已完成" : "未确认完成"}${observation.evidence_text ? `：${observation.evidence_text}` : ""}`));
+    detail.append(row);
+  });
+  block.append(detail); target.append(block);
+}
 function readableSummary(target, value, fallback) { replace(target); if (!value) { target.append(el("p", "muted", fallback)); return; } if (value.status || value.verdict || value.result) { const line = el("p"); line.append(badge(value.status || value.verdict || value.result)); target.append(line); } const lines = [value.comparison_summary, value.summary, value.reason, value.reasoning, value.note, value.explanation, value.task_applicability?.reason].filter((v) => typeof v === "string" && v.trim()); [...new Set(lines)].slice(0, 5).forEach((line) => target.append(el("p", "", line))); const issues = value.issues || value.warnings || value.review_reasons || []; if (Array.isArray(issues) && issues.length) { const list = el("ul"); issues.slice(0, 10).forEach((issue) => list.append(el("li", "", typeof issue === "string" ? issue : issue.reason || issue.message || JSON.stringify(issue)))); target.append(list); } const boundaries = value.boundaries; if (Array.isArray(boundaries)) boundaries.slice(0, 3).forEach((b, i) => { if (typeof b === "object" && b) { const evidence = b.evidence_text || b.evidence || b.reason || b.description; if (evidence) target.append(el("p", "", `边界 ${i + 1}：${typeof evidence === "string" ? evidence : JSON.stringify(evidence)}`)); } }); if (!target.childNodes.length) target.append(el("p", "muted", "已保存结构化结果，可展开查看完整输出。")); }
 function appendReviewComparison(target, review) {
   const comparison = review?.comparison;
@@ -86,7 +212,7 @@ function appendReviewComparison(target, review) {
   block.append(el("p", "muted", "这是 Qwen 与 GPT 自身视觉盲审的模型比较；GPT 粗参考不是人工金标，比较结果不代表人工验收或全量准确率。"));
   target.prepend(block);
 }
-function renderEvidence() { readableSummary($("model-summary"), S.detail?.model_annotation || S.detail?.original_annotation || annotation(), "尚无模型标注结果。"); $("model-json").textContent = JSON.stringify(S.detail?.model_annotation || S.detail?.original_annotation || annotation(), null, 2); const review = gptReview(); readableSummary($("review-summary"), review, "尚未进行 GPT 复核。没有复核结果不代表标注已通过。"); appendReviewComparison($("review-summary"), review); $("review-json").textContent = review ? JSON.stringify(review, null, 2) : "暂无结果"; }
+function renderEvidence() { readableSummary($("model-summary"), S.detail?.model_annotation || S.detail?.original_annotation || annotation(), "尚无模型标注结果。"); appendIntervalEvidence($("model-summary")); $("model-json").textContent = JSON.stringify(S.detail?.model_annotation || S.detail?.original_annotation || annotation(), null, 2); const review = gptReview(); readableSummary($("review-summary"), review, "尚未进行 GPT 复核。没有复核结果不代表标注已通过。"); appendReviewComparison($("review-summary"), review); $("review-json").textContent = review ? JSON.stringify(review, null, 2) : "暂无结果"; }
 
 async function loadExperts() { try { const data = await api(withRun("/api/expert")); renderExperts(data); } catch (_) { S.experts = []; renderExpertContent(); } }
 function renderExperts(data) { let items; if (Array.isArray(data)) items = data; else items = data?.experts || data?.items || (data?.expert ? [data.expert] : data && (data.pages || data.page_urls || data.annotation || data.key || data.manifest) ? [data] : []); S.experts = items; const selected = $("expert-select").value; replace($("expert-select")); if (!items.length) { const o = el("option", "", "暂无示范"); o.value = ""; $("expert-select").append(o); } else items.forEach((e, i) => { const option = el("option", "", e.name || e.label || e.id || e.key || `示范 ${i + 1}`); option.value = String(i); $("expert-select").append(option); }); if (isInt(selected) && Number(selected) < items.length) $("expert-select").value = selected; renderExpertContent(); }

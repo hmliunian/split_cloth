@@ -1,0 +1,25 @@
+spec_version: gripper_interval_v1
+precision: fixed_gripper_node_selection
+provider:
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model_id: qwen3.8-max-0902
+  credential_file: Qwen_api.txt
+  temperature: 0
+  max_output_tokens: 8192
+  timeout_s: 180
+  max_attempts: 3
+  max_images: 96
+  max_inflight: 2
+nodes:
+  opening_directions: {left: higher, right: higher}
+  candidate_levels: [[0.25, 0.1], [0.5, 0.25], [0.75, 0.45], [0.9, 0.65], [0.98, 0.9]]
+  grouping_window_s: 0.25
+  settled_samples: 3
+  settled_duration_s: 0.1
+  settled_tolerance_fraction: 0.02
+  settled_reversal_fraction: 0.1
+  settled_min_excursion_fraction: 0.1
+  settled_search_window_s: 2.0
+interval_montage:
+  columns: 3
+  rows: 4
