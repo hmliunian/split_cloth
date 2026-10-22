@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Split Cloth · 标注工作台</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="标注工作台首页"><span class="brand-mark" aria-hidden="true">▦</span><span>Split Cloth<small>时序标注工作台</small></span></a>
+    <div class="run-picker"><label for="run-select">当前运行</label><select id="run-select"><option value="">正在读取…</option></select><button class="icon-button" id="refresh" title="刷新数据" aria-label="刷新数据">↻</button></div>
+    <div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-text">连接中</span></div>
+  </header>
+  <div id="global-alert" class="global-alert" role="alert" hidden></div>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="轨迹导航">
+      <div class="sidebar-heading"><div><span class="eyebrow">DATASET EXPLORER</span><h1>标注轨迹</h1></div><span id="episode-count" class="count-pill">—</span></div>
+      <div id="summary" class="stats" aria-label="运行统计"><div><strong>—</strong><span>总轨迹</span></div><div><strong>—</strong><span>待复核</span></div><div><strong>—</strong><span>已确认</span></div></div>
+      <div class="filters">
+        <label class="search-field"><span class="sr-only">搜索轨迹</span><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索 episode 或数据集"></label>
+        <label><span class="field-label">数据集</span><select id="dataset-filter"><option value="">全部数据集</option></select></label>
+        <label><span class="field-label">标注状态</span><select id="status-filter"><option value="">全部状态</option><option value="accepted">模型已接受</option><option value="needs_review">待复核</option><option value="approved">人工已确认</option><option value="corrected">人工已修正</option><option value="out_of_scope">不适用</option><option value="failed">处理失败</option><option value="pending">待处理</option></select></label>
+      </div>
+      <div id="episode-list" class="episode-list" aria-live="polite"><div class="empty small">正在读取轨迹…</div></div>
+      <footer class="sidebar-footer">主视角 · 1 FPS · 时序网格图</footer>
+    </aside>
+    <main id="main" class="main">
+      <div id="welcome" class="welcome"><div class="welcome-symbol">▤</div><h2>选择一条轨迹开始复核</h2><p>查看视频和网格图，对照模型边界与复核意见。<br>所有帧号使用原始视频的 0 基索引。</p></div>
+      <div id="detail-loading" class="detail-loading" hidden><span class="spinner"></span>正在读取轨迹…</div>
+      <section id="episode-detail" hidden>
+        <div class="detail-heading">
+          <div><div class="breadcrumb" id="detail-dataset"></div><h2 id="detail-title"></h2><div class="episode-meta" id="detail-meta"></div></div>
+          <div class="heading-actions"><span id="detail-status" class="badge"></span><button class="button" id="previous-episode" title="上一条轨迹">← 上一条</button><button class="button" id="next-episode" title="下一条轨迹">下一条 →</button></div>
+        </div>
+        <div class="detail-layout">
+          <div class="visual-column">
+            <section class="card viewer-card" aria-label="视频与帧浏览">
+              <div class="card-toolbar"><div class="segmented" role="tablist" aria-label="查看方式"><button id="mode-video" class="active" role="tab" aria-selected="true">视频</button><button id="mode-frame" role="tab" aria-selected="false">原始帧</button><button id="mode-grid" role="tab" aria-selected="false">时序网格</button></div><span class="muted small-text">主视角</span></div>
+              <div id="video-view" class="visual-stage"><video id="video" controls playsinline preload="metadata"></video><div id="video-unavailable" class="media-message" hidden>暂无可播放预览，可使用「原始帧」或「时序网格」查看。</div></div>
+              <div id="frame-view" class="visual-stage" hidden><img id="frame-image" alt="当前原始视频帧"><span id="frame-image-message" class="media-message" hidden></span><div class="frame-overlay" id="frame-overlay"></div></div>
+              <div id="grid-view" class="grid-view" hidden><div id="grid-page-controls" class="grid-page-controls"></div><div id="grid-image-wrap" class="grid-image-wrap"><img id="grid-image" alt="按时间顺序排列的采样网格图"></div><p class="media-caption" id="grid-caption"></p></div>
+              <div class="transport">
+                <div class="frame-controls"><button class="button compact" id="back-frame" title="上一帧（←）">−1 帧</button><button class="button compact" id="forward-frame" title="下一帧（→）">+1 帧</button><label class="frame-jump">原始帧 <input id="frame-number" type="number" min="0" step="1" value="0"></label><button type="button" class="button compact" id="jump-frame">跳转</button><span id="frame-time" class="mono">0.000 s</span><span id="current-stage" class="badge neutral">阶段未知</span></div>
+                <input id="frame-slider" type="range" min="0" max="0" value="0" step="1" aria-label="原始视频帧">
+                <div class="timeline" id="timeline" aria-label="阶段时间线"></div><div class="timeline-labels"><span>0 s</span><span id="timeline-end">—</span></div>
+                <div class="stage-legend"><span><i class="s1"></i>阶段 1</span><span><i class="s2"></i>阶段 2</span><span><i class="s3"></i>阶段 3</span><span><i class="s4"></i>阶段 4</span><span class="muted">完成帧仍属于前一阶段</span></div>
+                <p id="timeline-hint" class="hint">未确认的结果显示为未知阶段。</p>
+              </div>
+            </section>
+            <section class="card expert-card">
+              <div class="card-title"><div><span class="eyebrow">REFERENCE</span><h3>Expert 示范</h3></div><select id="expert-select" aria-label="选择 expert 示范"><option value="">暂无示范</option></select></div>
+              <p class="hint">示范用于对照阶段语义，动作时长和边界位置可能不同。</p>
+              <div id="expert-content" class="expert-content"><p class="muted">当前运行尚未配置已标注示范。</p></div>
+            </section>
+            <section class="card evidence-card"><div class="card-title"><div><span class="eyebrow">MODEL EVIDENCE</span><h3>模型输出与 GPT 复核</h3></div></div><div class="evidence-columns"><div><h4>Qwen 标注</h4><div id="model-summary"></div><details><summary>查看完整输出</summary><pre id="model-json"></pre></details></div><div><h4>GPT 复核</h4><div id="review-summary"></div><details><summary>查看完整输出</summary><pre id="review-json"></pre></details></div></div></section>
+          </div>
+          <aside class="review-column">
+            <form id="review-form" class="card review-card">
+              <div class="card-title"><div><span class="eyebrow">HUMAN REVIEW</span><h3>边界与验收</h3></div><span id="dirty-indicator" class="badge neutral" hidden>未保存</span></div>
+              <p class="hint">边界取该阶段的结束帧。点击定位按钮可查看边界画面；「取当前帧」将写入当前浏览位置。</p>
+              <div id="boundary-fields" class="boundary-fields"></div>
+              <label class="form-field">第 4 阶段完成帧 <span class="optional">通过时必填</span><div class="boundary-input"><input id="completion-frame" type="number" min="0" step="1" placeholder="尚未确认"><button type="button" class="button compact" id="completion-seek" title="定位到完成帧">定位</button><button type="button" class="button compact" id="completion-use">取当前帧</button></div></label>
+              <div id="boundary-estimates" class="boundary-estimates"></div>
+              <div class="form-divider"></div>
+              <label class="form-field">复核结论<select id="review-status"><option value="needs_review">待复核</option><option value="approved">确认通过</option><option value="corrected">已修正并通过</option><option value="out_of_scope">不适用当前标准</option></select></label>
+              <label class="form-field">备注<textarea id="review-note" rows="4" placeholder="记录遮挡、返工、边界依据或修改原因…"></textarea></label>
+              <div id="form-error" class="form-error" role="alert" hidden></div>
+              <button id="save-review" class="button primary" type="submit">保存人工复核</button>
+              <p id="save-feedback" class="save-feedback" role="status" aria-live="polite"></p>
+              <p class="hint" id="review-version"></p>
+            </form>
+            <div class="keyboard-help"><span>快捷键</span><p><kbd>←</kbd> <kbd>→</kbd> 前后帧 <span>·</span> <kbd>Shift</kbd> 加速 1 秒</p><p><kbd>Space</kbd> 播放 / 暂停 <span>·</span> <kbd>Ctrl/⌘ S</kbd> 保存</p></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+  <dialog id="image-dialog"><button id="close-image" class="button" aria-label="关闭大图">关闭 ×</button><img id="dialog-image" alt="时序网格大图"></dialog>
+</body>
+</html>

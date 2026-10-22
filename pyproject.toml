@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "split-cloth"
+version = "0.1.0"
+description = "Expert-guided Qwen clothing stage annotation and remote review GUI"
+requires-python = ">=3.11"
+dependencies = ["pillow>=10", "av>=14", "numpy>=1.26", "fastapi>=0.115", "uvicorn>=0.30", "httpx[socks]>=0.27", "pyyaml>=6", "pyarrow>=17"]
+
+[project.scripts]
+split-cloth = "split_cloth.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+split_cloth = ["static/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
