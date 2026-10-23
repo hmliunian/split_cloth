@@ -7,3 +7,5 @@ logs/
 Qwen_api.txt
 *.log
 .env
+/data_path.txt
+/standard.zip
